@@ -1,0 +1,24 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "review"
+version = "1.0.0"
+description = "REVIEW — League of Legends ranked account analyzer (companion to DRAFT)"
+requires-python = ">=3.11"
+dependencies = ["numpy>=1.26", "Pillow>=10"]
+
+[project.optional-dependencies]
+dev = ["pytest>=8"]
+build = ["pyinstaller>=6"]
+
+[tool.setuptools]
+packages = ["review", "review.analysis", "review.cache", "review.riot_client",
+            "review.theme", "review.ui", "review.ui.screens"]
+
+[tool.setuptools.package-data]
+"review.analysis" = ["weights.toml"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

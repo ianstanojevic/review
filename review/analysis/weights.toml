@@ -1,0 +1,96 @@
+# REVIEW performance radar — scoring configuration.
+#
+# Each sub-metric becomes a per-game percentile against same-role peers
+# (inverted for "lower is better" metrics such as deaths). A game's axis
+# score is the weighted mean of its sub-metric percentiles; the axis score is
+# the mean over games, shrunk toward 50 for small samples, with a bootstrap
+# CI. 50 = a typical player in your role at your MMR.
+
+[settings]
+prior_sd = 10.0              # τ: how far true axis scores typically sit from 50
+bootstrap_iterations = 1000
+ci = 0.90
+seed = 1337
+min_games = 5                # fewer games -> radar flagged as insufficient
+consistency_tilt_weight = 0.35   # share of Consistency from after-loss vs after-win
+tilt_scale = 2.0             # axis points per game-score point of tilt
+session_gap_min = 60         # games further apart start a new session
+
+# Headline score = weighted mean of the axes.
+[overall]
+fighting = 1.0
+farming = 1.0
+vision = 1.0
+aggression = 1.0
+survival = 1.0
+teamplay = 1.0
+objectives = 1.0
+consistency = 1.0
+
+[axes.fighting]
+kda = 1.0
+dmg_per_min = 1.0
+dmg_share = 1.0
+solo_kills = 0.5
+fight_ka_per_death = 1.0
+
+[axes.farming]
+cs_per_min = 1.0
+cs_diff_10 = 0.75
+cs_diff_15 = 0.75
+gold_per_min = 1.0
+cs_share = 0.75
+
+[axes.vision]
+vision_per_min = 1.5
+wards_placed_per_min = 1.0
+wards_killed_per_min = 1.0
+control_wards = 1.0
+
+[axes.aggression]
+takedowns_pre14 = 1.0
+early_dmg = 1.0
+turret_plates = 1.0
+early_towers = 0.75
+
+[axes.survival]
+deaths_per_min = 1.0
+deaths_pre14 = 1.0
+deaths_ahead_rate = 0.75
+mitigated_per_death = 0.5
+
+[axes.teamplay]
+kp = 1.5
+obj_part = 1.0
+cc_per_min = 0.75
+ally_support_per_min = 0.75
+
+[axes.objectives]
+epic_part = 1.5
+turret_dmg_per_min = 1.0
+team_obj_control = 0.75
+
+# ---- role-specific overrides (replace the weight for that role only) ----
+
+[roles.UTILITY.vision]
+vision_per_min = 2.0
+wards_placed_per_min = 1.5
+wards_killed_per_min = 1.5
+control_wards = 1.5
+
+[roles.UTILITY.farming]      # supports barely farm: gold matters, CS less
+cs_per_min = 0.25
+cs_share = 0.25
+cs_diff_10 = 0.25
+cs_diff_15 = 0.25
+gold_per_min = 1.0
+
+[roles.UTILITY.teamplay]
+ally_support_per_min = 1.5
+cc_per_min = 1.25
+
+[roles.JUNGLE.objectives]
+epic_part = 2.0
+
+[roles.JUNGLE.aggression]
+turret_plates = 0.25

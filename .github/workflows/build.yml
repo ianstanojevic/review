@@ -1,0 +1,43 @@
+# Runs the tests and builds the Windows zip on every push / pull request.
+# The zip is attached to the run as an artifact (Actions -> run -> Artifacts).
+# It is built WITHOUT an API key: anything built here can end up public.
+# The friends' build with your key stays local: python packaging/build.py
+name: test and build
+
+on:
+  push:
+    branches: [main, master]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+      - name: Install
+        run: python -m pip install -e ".[dev]"
+      - name: Tests
+        run: python -m pytest -q
+
+  build:
+    needs: test
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+      - name: Install
+        run: python -m pip install -e ".[build]"
+      - name: Build Review.zip (no API key)
+        run: python packaging/build.py --no-key
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Review-windows
+          path: release/*.zip
+          if-no-files-found: error

@@ -1,0 +1,14 @@
+.env
+__pycache__/
+*.pyc
+.pytest_cache/
+data/
+*.sqlite
+*.sqlite-*
+build/
+dist/
+*.spec.bak
+release/
+review/_bundled_key.py
+docs/readme_preview.html
+*.egg-info/
