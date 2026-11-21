@@ -3,7 +3,8 @@
 Third app in the DRAFT / REVIEW family: a remote for League's own replay
 player plus a notebook for your deaths, missed chances and matchups.
 
-* **Before the game:** DRAFT (later: shows your matchup notes in champ select)
+* **Before the game:** DRAFT — shows your REPLAY matchup notes vs your lane
+  opponent under Skill order in its build view
 * **After the game:** REPLAY — watch, jump, tag, write
 * **Every week:** REVIEW — totals and trends (later: reads REPLAY's tags)
 
@@ -103,6 +104,13 @@ players by Riot ID if you ever need to join the two.
 
 ## Next
 
-* DRAFT: show `notes.matchup_history(None, opponent)` in champ select.
+* ~~DRAFT: matchup notes in champ select~~ — done 2026-11-21 in
+  `Desktop\draft_tool_v2.py` (outside this repo; backup
+  `draft_tool_v2_pre_notes.py`): `read_matchup_notes()` opens
+  `replay.sqlite` read-only (WAL, so fine while REPLAY writes), matches
+  champions by Data Dragon id without case/punctuation, also counts the
+  enemy support; "YOUR NOTES VS X" under Skill order, direct opponent first,
+  then notes where you played the same champion, newest first, max 3.
+  Re-read every time the build is drawn, so it's always in sync.
 * REVIEW: a "Why you die" card from `notes.category_counts(puuid, "death")`.
 * OBS clips of tagged deaths (obs-websocket), so they survive patches.
