@@ -32,7 +32,7 @@ from review.theme import window
 from review.theme.tokens import (ACCENT, BAD, BORDER, DARK_BG, DIM, EDGE,
                                  EDGE_HI, F_LG_B, F_MD, F_SM, F_SM_B, F_XS,
                                  F_XS_B, FG, GOOD, HOVER, PANEL, PANEL2,
-                                 SP_L, SP_M, SP_S, SP_XS, mix)
+                                 SP_L, SP_M, SP_S, SP_XS, TEAL_BG, mix)
 from review.theme.widgets import px
 from review.ui.assets import IconStore
 
@@ -167,6 +167,7 @@ class App:
         self._save_job = None
         self._inbox: queue.Queue = queue.Queue()
         self._alive = True                     # False once root is destroyed
+        self._offscreen = 0                    # polls with you off screen
         self._build()
         self.root.after(30, self._drain)
         root.geometry(window.safe_geometry(
@@ -212,9 +213,8 @@ class App:
         bottom.pack(fill="x", side="bottom", pady=(SP_M, 0))
         self.keys_lbl = tk.Label(
             bottom, text="Space play/pause · ←/→ 10 s · N next untagged · "
-            "M missed chance · B bookmark", bg=DARK_BG, fg=mix(DIM, DARK_BG,
-                                                              0.35),
-            font=F_XS)
+            "M missed chance · B bookmark · F follow me", bg=DARK_BG,
+            fg=mix(DIM, DARK_BG, 0.35), font=F_XS)
         self.keys_lbl.pack(side="left", anchor="s")
         self.status = tk.Label(bottom, text="", bg=DARK_BG, fg=DIM, font=F_SM)
         self.status.pack(side="right", anchor="s")
@@ -632,14 +632,20 @@ class App:
                                    "paused") else "▶", self.toggle_pause,
                                 "Play / pause (Space)"),
                                ("10 ⟳", lambda: self.nudge(10),
-                                "Forward 10 s (→)"),
-                               ("◎ Follow me", self.follow_me,
-                                "Lock the camera on your champion")):
+                                "Forward 10 s (→)")):
             b = W.button(ctl, text, cmd, fg=FG if live else mix(DIM, PANEL,
                                                                  0.3),
                          font=F_SM)
             b.pack(side="left", padx=(0, px(3)))
             self.tooltip.bind(b, tip)
+        on = self._follow_on()
+        b = W.button(ctl, "◎ Follow me", self.follow_me,
+                     fg=GOOD if on else (FG if live else mix(DIM, PANEL, 0.3)),
+                     bg=TEAL_BG if on else PANEL2, font=F_SM)
+        b.pack(side="left", padx=(0, px(3)))
+        self.tooltip.bind(b, "On: the camera stays on you — after every "
+                          "jump, and brought back if it wanders off. "
+                          "Off: the camera is yours (F)")
         speed = float(self.prefs.get("speed", 0.5))
         sp = W.TabRow(ctl, None, SPEEDS, speed, on_change=self.set_speed,
                       style="teal", bg=PANEL, small=True)
@@ -649,7 +655,15 @@ class App:
 
     def _remote_key(self):
         pb = self.playback
-        return (pb is not None, bool(pb and pb.get("paused")))
+        return (pb is not None, bool(pb and pb.get("paused")),
+                self._follow_on())
+
+    def _follow_on(self) -> bool:
+        return bool(self.prefs.get("follow", True))
+
+    def _me(self):
+        g = self.game
+        return (g.me.champion, g.me.riot_id.split("#")[0]) if g else None
 
     def _check_replay(self):
         g = self.game
@@ -742,13 +756,12 @@ class App:
         offset = float(self.prefs.get("offset_s", 0))
         speed = float(self.prefs.get("speed", 0.5))
         target = max(t_ms / 1000 - lead + offset, 0)
-        follow = self.prefs.get("follow", True)
-        g = self.game
+        me = self._me() if self._follow_on() else None
 
         def go():
             self.rapi.set_playback(time=target, paused=False, speed=speed)
-            if follow and g is not None:
-                self.rapi.follow(g.me.champion, g.me.riot_id.split("#")[0])
+            if me:      # a seek clears the lock: lock once it's done
+                self.rapi.follow_after_seek(*me)
         self._replay_call(go)
         self.set_status("Jumped to %s (%d s before)" % (fmt_time(
             t_ms / 1000), lead))
@@ -756,9 +769,13 @@ class App:
             self.tl.set_cursor(t_ms)
 
     def nudge(self, s):
+        me = self._me() if self._follow_on() else None
+
         def go():
             pb = self.rapi.playback()
             self.rapi.set_playback(time=pb.get("time", 0) + s)
+            if me:
+                self.rapi.follow_after_seek(*me)
         self._replay_call(go)
 
     def toggle_pause(self):
@@ -772,8 +789,16 @@ class App:
         self._replay_call(lambda: self.rapi.set_playback(speed=v), quiet=True)
 
     def follow_me(self):
+        """Toggle "camera stays on me". Turning it on locks right away."""
         g = self.game
         if g is None:
+            return
+        on = not self._follow_on()
+        self.prefs.set("follow", on)
+        self._offscreen = 0
+        self._render_remote()
+        if not on:
+            self.set_status("Camera is yours — Follow me is off", DIM)
             return
 
         def go():
@@ -789,12 +814,16 @@ class App:
 
     def _poll_local(self):
         """Every second: is the client up, is a replay open, where is it."""
+        me = self._me() if self._follow_on() else None
+
         def work():
             ok = self.lcu.running()
             try:
                 pb = self.rapi.playback()
             except local.LocalError:
                 pb = None
+            if pb is not None and me and not pb.get("seeking"):
+                self._keep_on_me(me)
             self.post(done, ok, pb)
 
         def done(ok, pb):
@@ -815,6 +844,19 @@ class App:
             if self._alive:
                 self.root.after(1000, self._poll_local)
         threading.Thread(target=work, daemon=True).start()
+
+    def _keep_on_me(self, me):
+        """Worker thread, once a second while Follow me is on: if you're
+        alive and off screen twice in a row (single off-screen frames
+        happen while following), lock the camera on you again."""
+        try:
+            vis = self.rapi.on_screen(*me)
+            self._offscreen = self._offscreen + 1 if vis is False else 0
+            if self._offscreen >= 2:
+                self._offscreen = 0
+                self.rapi.follow(*me)
+        except local.LocalError:
+            self._offscreen = 0
 
     # timeline
     def _timeline_panel(self, body, g: GameView):
@@ -1370,6 +1412,8 @@ class App:
             r.bind("<%s>" % k, guard(lambda: self.add_mark(MISSED)))
         for k in ("b", "B"):
             r.bind("<%s>" % k, guard(lambda: self.add_mark(BOOKMARK)))
+        for k in ("f", "F"):
+            r.bind("<%s>" % k, guard(self.follow_me))
 
     # ------------------------------------------------------ settings
     def show_settings(self):
@@ -1413,7 +1457,8 @@ class App:
             anchor="w")
         fol = tk.BooleanVar(value=bool(self.prefs.get("follow", True)))
         W.caption(body, "CAMERA")
-        tk.Checkbutton(body, text="Lock the camera on me after a jump",
+        tk.Checkbutton(body, text="Follow me: keep the camera on me (also "
+                       "the ◎ button, F)",
                        variable=fol, bg=PANEL, fg=FG, selectcolor=PANEL2,
                        activebackground=PANEL, activeforeground=FG,
                        font=F_SM).pack(anchor="w")

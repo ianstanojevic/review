@@ -231,6 +231,8 @@ class _Fake(http.server.BaseHTTPRequestHandler):
         s = self.state
         if self.path == "/replay/playback":
             s["pb"].update(body)
+            if "time" in body:     # like the game: a seek clears the lock
+                s["render"].update(selectionName="", cameraAttached=False)
             self._send(s["pb"])
         elif self.path == "/replay/render":
             if "selectionName" in body:
@@ -378,6 +380,7 @@ def test_ui(ui, server):
     renders), which skipped or failed the second test ~4 runs in 10."""
     _ui_flow(*ui)
     _ui_with_replay_open(*ui, server)
+    _ui_keep_on_me(*ui, server)
 
 
 def _ui_flow(a, errors):
@@ -475,3 +478,52 @@ def test_follow_api_champion_name(server):
     assert _Fake.state["render"]["selectionName"] == "Miss Fortune"
     _Fake.state["render"]["selectionName"] = ""
     assert api.follow("MissFortune") == "locked"
+
+
+OFF = "340282346638528859811704183484516925440," * 2
+
+
+def test_follow_after_seek(server):
+    """A seek clears the lock (16.23), so a lock sent with the seek is lost;
+    follow_after_seek locks once the seek is done."""
+    _Fake.state = {"pb": {"time": 100.0, "seeking": False},
+                   "render": {"cameraAttached": False, "selectionName": ""},
+                   "selectable": ("Miss Fortune",),
+                   "players": [{"championName": "Miss Fortune",
+                                "riotIdGameName": "Me", "isDead": False,
+                                "screenPositionCenter": "632.1,728.6"}]}
+    api = local.ReplayAPI(server)
+    assert api.follow("MissFortune") == "locked"
+    api.set_playback(time=500)
+    assert _Fake.state["render"]["selectionName"] == ""      # lost
+    assert api.follow_after_seek("MissFortune", settle=0) == "locked"
+    assert _Fake.state["render"]["selectionName"] == "Miss Fortune"
+
+
+def test_on_screen(server):
+    me = {"championName": "Miss Fortune", "isDead": False,
+          "rawChampionName": "game_character_displayname_MissFortune",
+          "screenPositionCenter": "632.1,728.6"}
+    _Fake.state = {"pb": {}, "render": {}, "players": [me]}
+    api = local.ReplayAPI(server)
+    assert api.on_screen("MissFortune") is True
+    me["screenPositionCenter"] = OFF.rstrip(",")
+    assert api.on_screen("MissFortune") is False
+    me["isDead"] = True                      # dead: don't drag the camera
+    assert api.on_screen("MissFortune") is None
+    assert api.on_screen("Jinx") is None     # not in this replay
+
+
+def _ui_keep_on_me(a, errors, server):
+    """Follow me: one off-screen poll is a glitch, two bring you back."""
+    me = {"championName": "Kalista", "isDead": False,
+          "screenPositionCenter": OFF.rstrip(",")}
+    _Fake.state = {"pb": {"time": 600.0, "seeking": False},
+                   "render": {"cameraAttached": False, "selectionName": ""},
+                   "selectable": ("Kalista",), "players": [me]}
+    a.rapi = local.ReplayAPI(server)
+    a._offscreen = 0
+    a._keep_on_me(("Kalista", "Me"))                 # one glitch frame: wait
+    assert _Fake.state["render"]["selectionName"] == ""
+    a._keep_on_me(("Kalista", "Me"))                 # still off: bring back
+    assert _Fake.state["render"]["selectionName"] == "Kalista"

@@ -82,6 +82,14 @@ source, then checked on Ian's PC with the client and a real replay open:
    form, and rejects Riot IDs (reads back `""`). `follow()` now tries the
    champion name first and compares without spaces/punctuation; before, a
    champion like Miss Fortune only locked via a later fallback.
+   **Every seek clears the lock** (a jump, ±10 s), and for up to ~8 s
+   after one the game keeps moving the camera; `selectionName` also reads
+   back `""` a second after a lock while the camera still follows. So
+   **Follow me** is a toggle (◎ button / F, on by default): after each
+   seek it locks once the seek is done and re-locks until you're on screen
+   twice in a row (`follow_after_seek`), and while it's on the 1 s poll
+   brings the camera back when you're alive and off screen two polls in a
+   row (`screenPositionCenter` is 3.4e38 off screen). Off = camera is yours.
 4. **Look** — ✅ at 200 %: banner, tab row, panels and status line are
    pixel-identical to REVIEW; tab row and first panel sit on the same pixel
    rows as DRAFT. `--snapshot` captures with PrintWindow off-screen on

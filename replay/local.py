@@ -17,6 +17,7 @@ import json
 import os
 import re
 import ssl
+import time
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
@@ -321,6 +322,72 @@ class ReplayAPI:
         return "attached"
 
 
+    # ---- keeping the camera on you (checked live on 16.23) --------------
+    # Every seek (a jump, ±10 s) clears the selection when it finishes, so
+    # a lock sent with the seek is lost: wait for the seek, then lock.
+    # selectionName also reads back "" a second after a lock while the
+    # camera still follows, so "is it still on me?" is answered from where
+    # the champion is on screen instead.
+
+    def wait_seek(self, timeout: float = 4.0) -> None:
+        end = time.monotonic() + timeout
+        while time.monotonic() < end:
+            if not self.playback().get("seeking"):
+                return
+            time.sleep(0.05)
+
+    def find_player(self, champion: str, riot_name: str = "") -> dict | None:
+        want = _norm(champion)
+        for p in self.players():
+            raw = (p.get("rawChampionName") or "").rsplit("_", 1)[-1]
+            if _norm(p.get("championName")) == want or _norm(raw) == want                     or (riot_name and _norm(p.get("riotIdGameName"))
+                        == _norm(riot_name)):
+                return p
+        return None
+
+    def on_screen(self, champion: str, riot_name: str = "") -> bool | None:
+        """True: you're on screen. False: alive but off screen (the camera
+        went elsewhere). None: dead, not in this replay, or unknown."""
+        p = self.find_player(champion, riot_name)
+        if p is None or p.get("isDead"):
+            return None
+        return _visible(p.get("screenPositionCenter"))
+
+    def follow_after_seek(self, champion: str, riot_name: str = "",
+                          settle: float = 8.0, step: float = 0.5) -> str:
+        """Lock once the seek has finished. For a few seconds after a seek
+        the game keeps moving the camera (live: off screen for up to ~6 s
+        after a "locked" answer), so keep checking every ``step`` s for up
+        to ``settle`` s and lock again until you're on screen twice in a
+        row. Dead or not found: one lock and done."""
+        self.wait_seek()
+        r = self.follow(champion, riot_name)
+        if r != "locked":
+            return r
+        end, good = time.monotonic() + settle, 0
+        while time.monotonic() < end and good < 2:
+            time.sleep(step)
+            vis = self.on_screen(champion, riot_name)
+            if vis is None:
+                break
+            if vis:
+                good += 1
+            else:
+                good = 0
+                self.follow(champion, riot_name)
+        return r
+
 def _norm(name) -> str:
     """'Miss Fortune' / 'MissFortune' / "Kai'Sa" -> 'missfortune' / 'kaisa'."""
     return re.sub(r"[^0-9a-z]", "", (name or "").lower())
+
+
+def _visible(pos) -> bool:
+    """'632.15,728.67' -> True. Off screen the game reports 3.4e38 for both
+    (FLT_MAX); single glitch frames of that happen while following too, so
+    callers should want two in a row before acting."""
+    try:
+        x, y = (float(v) for v in str(pos).split(","))
+    except ValueError:
+        return False
+    return abs(x) < 1e6 and abs(y) < 1e6
