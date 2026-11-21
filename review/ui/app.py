@@ -25,6 +25,7 @@ from ..riot_client import (InvalidKey, MissingKey, PlayerNotFound,
 from ..sync import QUEUE_LABEL, QUEUES, SyncJob
 from ..theme import anim
 from ..theme import widgets as W
+from ..theme import window
 from ..theme.tokens import (BAD, DARK_BG, DIM, EDGE, EDGE_HI, F_SM, F_SM_B,
                             F_XS, FG, GOOD, PANEL, PANEL2, SP_L, SP_M, SP_S,
                             SP_XS)
@@ -81,11 +82,7 @@ def safe_destroy(w, log=None) -> None:
                 pass
 
 
-def _parse_geo(g: str | None):
-    """'WxH+X+Y' (X/Y may be negative, e.g. '+-6000') -> (w, h, x, y)."""
-    import re
-    m = re.match(r"^(\d+)x(\d+)\+(-?\d+)\+(-?\d+)$", g or "")
-    return tuple(int(v) for v in m.groups()) if m else None
+_parse_geo = window.parse_geo
 
 
 def rank_text(snap) -> str:
@@ -159,59 +156,15 @@ class App:
         anim.fade_in(root)
 
     # ------------------------------------------------------- window place
-    @staticmethod
-    def _virtual_screen() -> tuple[int, int, int, int]:
-        """(x, y, w, h) of all monitors together, in pixels."""
-        try:
-            import ctypes
-            m = ctypes.windll.user32.GetSystemMetrics
-            w, h = m(78), m(79)
-            if w > 0 and h > 0:
-                return m(76), m(77), w, h
-        except Exception:
-            pass
-        return 0, 0, 1920, 1080
+    # (shared with REPLAY: review/theme/window.py)
+    _virtual_screen = staticmethod(window.virtual_screen)
+    _work_area = staticmethod(window.work_area)
 
     def _on_screen(self, w, h, x, y) -> bool:
-        """At least a good chunk of the title bar is on some monitor."""
-        vx, vy, vw, vh = self._virtual_screen()
-        return (x + w - px(150) > vx and x + px(150) < vx + vw
-                and y >= vy - px(10) and y + px(40) < vy + vh)
-
-    @staticmethod
-    def _work_area(root) -> tuple[int, int, int, int]:
-        """(x, y, w, h) of the primary screen minus the taskbar."""
-        try:
-            import ctypes
-            from ctypes import wintypes
-            r = wintypes.RECT()
-            if ctypes.windll.user32.SystemParametersInfoW(48, 0,
-                                                          ctypes.byref(r), 0):
-                return r.left, r.top, r.right - r.left, r.bottom - r.top
-        except Exception:
-            pass
-        return 0, 0, root.winfo_screenwidth(), root.winfo_screenheight() - 48
+        return window.on_screen(w, h, x, y)
 
     def _safe_geometry(self, saved: str | None) -> str:
-        """The saved size/position if it is visible; otherwise a default
-        size centred in the work area (above the taskbar). A window bigger
-        than the screen (e.g. saved on a larger monitor) is shrunk. Sizes
-        are the client area: the title bar and frame come on top."""
-        ax, ay, aw, ah = self._work_area(self.root)
-        chrome_w, chrome_h = px(16), px(40)      # frame + title bar
-        max_w, max_h = aw - chrome_w, ah - chrome_h
-        g = _parse_geo(saved) if saved else None
-        if g:
-            w, h, x, y = g
-            w, h = min(w, max_w), min(h, max_h)
-            if self._on_screen(w, h, x, y):
-                return "%dx%d+%d+%d" % (w, h, x, y)
-        dw, dh = getattr(self, "default_size", (1240, 900))
-        w = min(px(dw), max_w - px(20))
-        h = min(px(dh), max_h - px(10))
-        x = ax + max((aw - w - chrome_w) // 2, 0)
-        y = ay + max((ah - h - chrome_h) // 2, 0)
-        return "%dx%d+%d+%d" % (w, h, x, y)
+        return window.safe_geometry(self.root, saved, (1240, 900))
 
     # ------------------------------------------------------------ layout
     def _build(self):

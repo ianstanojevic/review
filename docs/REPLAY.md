@@ -50,34 +50,48 @@ Threads: all disk/network work runs in worker threads and comes back via
 `App.post()`, a queue the UI thread drains every 30 ms (Tk's `after()` from
 a worker raises before `mainloop` starts and the call is lost).
 
-## Verified here vs. to verify on Windows
+## Verified on Windows (2026-11-21, client 16.23.840.6595)
 
-Built and tested in a Linux sandbox (112 tests green, UI rendered headless
-under Xvfb). Endpoint names come from Riot's Replay API docs and Riot's
-League Director source. Not testable there — **check these first in Claude
-Code with the League client open:**
+Built in a Linux sandbox from Riot's Replay API docs and League Director's
+source, then checked on Ian's PC with the client and a real replay open:
 
-1. **LCU replay endpoints** — `GET /lol-replays/v1/metadata/{gameId}`,
-   `POST /lol-replays/v1/rofls/{gameId}/download/graceful`,
-   `POST /lol-replays/v1/rofls/{gameId}/watch` (body
-   `{"componentType": "replay-button_match-history"}`),
-   `POST /lol-replays/v2/metadata/{gameId}/create`. Compare with the
-   client's own endpoint list (`GET /help` on the LCU) and fix paths/bodies
-   in `LeagueClient` if they differ.
-2. **Clock offset** — jump to a death and check that the replay lands
-   ~15 s before it. If it is consistently off, set **Clock offset** in ⚙ (or
-   compute it once from `/replay/playback` vs the timeline).
-3. **Camera lock** — `ReplayAPI.follow()` uses `selectionName` when
-   `/replay/render` exposes it, else only `cameraAttached=True` (then you
-   click your champion once). Check the generated OpenAPI spec of the Replay
-   API on Ian's client to see whether there is a proper field for picking
-   the unit, and use it.
-4. **Look** — ✅ checked on Windows at 200 % (2026-11-21): banner, tab row,
-   panels and status line are pixel-identical to REVIEW; tab row and first
-   panel sit on the same pixel rows as DRAFT. `--snapshot` captures with
-   PrintWindow off-screen on Windows, like REVIEW's.
+1. **LCU replay endpoints** — ✅ all four paths exist in the client's `/help`
+   (`GetLolReplaysV1MetadataByGameId`, `PostLolReplaysV1RoflsByGameIdDownloadGraceful`,
+   `PostLolReplaysV1RoflsByGameIdWatch`, `PostLolReplaysV2MetadataByGameIdCreate`);
+   download/watch take `LolReplaysReplayContextData` = `{"componentType"}`.
+   Fixed after checking:
+   * metadata answers **HTTP 404** for a game the client hasn't loaded
+     (not an empty state) → `metadata()` returns `{}` so the app calls
+     `create` instead of showing "Client: … HTTP 404";
+   * `create` body is exactly `gameVersion, gameType, queueId, gameEnd`
+     (no `gameId`) — tested live: state goes 404 → `download`;
+   * the failed-download state is `retryDownload` (not `retry`); `found` and
+     `maxLimitReached` added;
+   * `downloadProgress` is junk outside `downloading` (e.g. 2349731080) →
+     dropped there, clamped to 0–100 while downloading.
+2. **Clock offset** — ✅ none needed. Replay `ChampionKill` times
+   (`/liveclientdata/eventdata`) vs the Riot timeline's `CHAMPION_KILL`:
+   0.01–0.77 s apart over 17 kills (median 0.09 s). A jump to a death at
+   1203.1 s asked for 1188.1 and the replay sat at 1188.6 half a second
+   later. Default **Clock offset** stays 0. The Replay API answers 404 for
+   ~20 s while the game loads; the app treats that as "no replay open".
+3. **Camera lock** — ✅ the OpenAPI spec (`/swagger/v3/openapi.json`) has
+   `Render.selectionName`: "Sets the selection to the given name, case
+   insensitive". The game accepts the champion name in either form
+   (`MissFortune` from Riot's API or `Miss Fortune`), reads back the display
+   form, and rejects Riot IDs (reads back `""`). `follow()` now tries the
+   champion name first and compares without spaces/punctuation; before, a
+   champion like Miss Fortune only locked via a later fallback.
+4. **Look** — ✅ at 200 %: banner, tab row, panels and status line are
+   pixel-identical to REVIEW; tab row and first panel sit on the same pixel
+   rows as DRAFT. `--snapshot` captures with PrintWindow off-screen on
+   Windows, like REVIEW's.
 5. **Build** — ✅ `packaging/replay.spec` → `dist/Replay/Replay.exe` builds
    and runs (`Replay.exe --demo --snapshot out.png`).
+
+Note: Riot API PUUIDs are encrypted per API key, so the client's
+`/lol-summoner/v1/current-summoner` PUUID never matches the cache's. Match
+players by Riot ID if you ever need to join the two.
 
 ## Next
 

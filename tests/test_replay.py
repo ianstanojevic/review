@@ -3,6 +3,7 @@ local APIs (against a fake HTTPS server) and a UI smoke test."""
 import gzip
 import http.server
 import json
+import re
 import ssl
 import subprocess
 import threading
@@ -210,8 +211,14 @@ class _Fake(http.server.BaseHTTPRequestHandler):
         elif self.path == "/liveclientdata/playerlist":
             self._send(s.get("players", []))
         elif self.path.startswith("/lol-replays/v1/metadata/"):
-            self._send({"gameId": 1, "state": "watch",
-                        "downloadProgress": 0})
+            # like the real client (16.23): 404 until the game is known,
+            # junk downloadProgress outside "downloading"
+            gid = int(self.path.rsplit("/", 1)[1])
+            if gid in s.get("known", (8050970813,)):
+                self._send({"gameId": gid, "state": "watch",
+                            "downloadProgress": 2349731080})
+            else:
+                self._send({"errorCode": "RPC_ERROR", "httpStatus": 404}, 404)
         elif self.path == "/lol-replays/v1/configuration":
             self._send({"isReplaysEnabled": True})
         else:
@@ -226,13 +233,19 @@ class _Fake(http.server.BaseHTTPRequestHandler):
             s["pb"].update(body)
             self._send(s["pb"])
         elif self.path == "/replay/render":
-            if "selectionName" in body and body["selectionName"] not in \
-                    s.get("selectable", ()):
-                body = {k: v for k, v in body.items()
-                        if k != "selectionName"}
+            if "selectionName" in body:
+                # like the game (16.23): any spelling of a selectable name,
+                # read back in display form; unknown names (Riot IDs) -> ""
+                key = re.sub(r"[^0-9a-z]", "", body["selectionName"].lower())
+                disp = {re.sub(r"[^0-9a-z]", "", n.lower()): n
+                        for n in s.get("selectable", ())}
+                body = dict(body, selectionName=disp.get(key, ""))
             s["render"].update(body)
             self._send(s["render"])
         else:
+            if self.path.startswith("/lol-replays/v2/metadata/"):
+                s.setdefault("known", [8050970813]).append(
+                    int(self.path.split("/")[4]))
             self._send(None, 204)
 
 
@@ -299,7 +312,8 @@ def test_league_client(server, tmp_path):
         "LeagueClient:1234:%d:s3cret:https" % server)
     _Fake.log.clear()
     assert lc.running()
-    assert lc.metadata(8050970813)["state"] == "watch"
+    md = lc.metadata(8050970813)
+    assert md["state"] == "watch" and "downloadProgress" not in md
     lc.download(8050970813)
     lc.watch(8050970813)
     gets = [x for x in _Fake.log if x[0] == "GET"]
@@ -357,8 +371,16 @@ def _pump(app, secs=1.5, until=None):
     return until() if until else True
 
 
-def test_ui_flow(ui):
-    a, errors = ui
+def test_ui(ui, server):
+    """One window for both UI checks: a second Tk() in the same process
+    comes up broken now and then on Windows (Python 3.14 / Tcl 8.6.15:
+    'invalid command name "tcl_findLibrary"', or a window that never
+    renders), which skipped or failed the second test ~4 runs in 10."""
+    _ui_flow(*ui)
+    _ui_with_replay_open(*ui, server)
+
+
+def _ui_flow(a, errors):
     assert _pump(a, 8, lambda: a.game is not None and a.tl is not None)
     g = a.game
     assert g.me.champion == "Kalista" and len(a.marks) == 14
@@ -390,11 +412,10 @@ def test_ui_flow(ui):
     assert not errors, errors
 
 
-def test_ui_with_replay_open(ui, server):
+def _ui_with_replay_open(a, errors, server):
     """A replay is open (fake Replay API): the poll picks it up, a jump
     seeks to 15 s before the moment at the chosen speed, and a missed
     chance lands at the replay's current time."""
-    a, errors = ui
     assert _pump(a, 8, lambda: a.game is not None and a.tl is not None)
     _Fake.state = {"pb": {"time": 600.0, "paused": True, "speed": 1.0,
                           "length": 1700.0, "seeking": False},
@@ -419,3 +440,38 @@ def test_ui_with_replay_open(ui, server):
     mk = a._mark(a.sel_mark)
     assert len(a.marks) == n + 1 and mk.kind == MISSED and mk.t_ms == 600_000
     assert not errors, errors
+
+
+def test_league_client_unseen_game(server, tmp_path):
+    """The client answers 404 for a game it hasn't loaded; metadata() turns
+    that into {} and create_metadata() sends exactly the 16.23 schema."""
+    _Fake.state = {"pb": {}, "render": {}, "known": [8050970813]}
+    (tmp_path / "lockfile").write_text(
+        "LeagueClient:1234:%d:s3cret:https" % server)
+    lc = local.LeagueClient(tmp_path)
+    assert lc.metadata(7000000001) == {}
+    _Fake.log.clear()
+    lc.create_metadata(7000000001, {"info": {
+        "gameEndTimestamp": 1763300000000, "gameType": "MATCHED_GAME",
+        "gameVersion": "16.23.840.6595", "queueId": 420}})
+    (post,) = [x for x in _Fake.log if x[0] == "POST"]
+    assert post[1] == "/lol-replays/v2/metadata/7000000001/create"
+    assert set(post[2]) == {"gameEnd", "gameType", "gameVersion", "queueId"}
+    assert lc.metadata(7000000001)["state"] == "watch"
+
+
+def test_follow_api_champion_name(server):
+    """Riot's API says 'MissFortune', the replay says 'Miss Fortune' and
+    rejects Riot IDs: still a lock (checked live on 16.23)."""
+    _Fake.state = {"pb": {}, "render": {"cameraAttached": False,
+                                        "selectionName": ""},
+                   "selectable": ("Miss Fortune",),
+                   "players": [{"championName": "Miss Fortune",
+                                "rawChampionName":
+                                "game_character_displayname_MissFortune",
+                                "riotIdGameName": "Brödbakarn"}]}
+    api = local.ReplayAPI(server)
+    assert api.follow("MissFortune", "Brödbakarn") == "locked"
+    assert _Fake.state["render"]["selectionName"] == "Miss Fortune"
+    _Fake.state["render"]["selectionName"] = ""
+    assert api.follow("MissFortune") == "locked"

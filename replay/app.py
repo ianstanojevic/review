@@ -28,12 +28,12 @@ from review.cache import Cache
 from review.riot_client import get_region
 from review.theme import anim
 from review.theme import widgets as W
+from review.theme import window
 from review.theme.tokens import (ACCENT, BAD, BORDER, DARK_BG, DIM, EDGE,
                                  EDGE_HI, F_LG_B, F_MD, F_SM, F_SM_B, F_XS,
                                  F_XS_B, FG, GOOD, HOVER, PANEL, PANEL2,
                                  SP_L, SP_M, SP_S, SP_XS, mix)
 from review.theme.widgets import px
-from review.ui.app import App as ReviewApp, _parse_geo
 from review.ui.assets import IconStore
 
 from . import local, rofl
@@ -166,11 +166,17 @@ class App:
         self.job = None
         self._save_job = None
         self._inbox: queue.Queue = queue.Queue()
+        self._alive = True                     # False once root is destroyed
         self._build()
         self.root.after(30, self._drain)
-        root.geometry(self._safe_geometry(self.prefs.get("geometry")))
+        root.geometry(window.safe_geometry(
+            root, self.prefs.get("geometry"), (1320, 900)))
         root.minsize(px(1080), px(680))
         root.protocol("WM_DELETE_WINDOW", self.close)
+        # stop the repeating timers once the window is gone (otherwise they
+        # keep re-arming on the dead Tcl interpreter)
+        root.bind("<Destroy>", lambda e: e.widget is root and setattr(
+            self, "_alive", False), add="+")
         root.report_callback_exception = lambda exc, val, tb: self._log(
             "".join(traceback.format_exception(exc, val, tb)))
         self._bind_keys()
@@ -179,13 +185,6 @@ class App:
             self._pick_player()
             self.root.after(400, self._poll_local)
         anim.fade_in(root)
-
-    # Window placement: REVIEW's (visible-or-centred, never off-screen).
-    _virtual_screen = staticmethod(ReviewApp._virtual_screen)
-    _on_screen = ReviewApp._on_screen
-    _work_area = staticmethod(ReviewApp._work_area)
-    _safe_geometry = ReviewApp._safe_geometry
-    default_size = (1320, 900)
 
     # ------------------------------------------------------------ layout
     def _build(self):
@@ -240,6 +239,8 @@ class App:
                     self._log(traceback.format_exc())
         except queue.Empty:
             pass
+        if not self._alive:
+            return
         try:
             self.root.after(30, self._drain)
         except tk.TclError:
@@ -612,11 +613,11 @@ class App:
         state = st.get("state")
         txt = st.get("text", "Checking replay…")
         col = GOOD if state == "watch" else (
-            EDGE_HI if state in ("download", "downloading", "retry")
+            EDGE_HI if state in ("download", "downloading", "retryDownload")
             else DIM)
         tk.Label(line, text=txt, bg=PANEL, fg=col, font=F_SM).pack(
             side="left", padx=(0, SP_M))
-        if state in ("download", "retry"):
+        if state in ("download", "retryDownload"):
             W.button(line, "Download", self.download, gold=True).pack(
                 side="left")
         elif state == "watch":
@@ -661,7 +662,7 @@ class App:
             try:
                 md = self.lcu.metadata(gid)
                 state = md.get("state")
-                if state in (None, "", "lost") and md.get("gameId") is None:
+                if not md:          # client hasn't seen this game yet
                     try:
                         self.lcu.create_metadata(gid, self.cache.get_match(
                             match))
@@ -691,7 +692,7 @@ class App:
                 return
             self.replay_state = res
             self._render_remote()
-            if res.get("state") in ("downloading", "checking"):
+            if res.get("state") in ("downloading", "checking", "found"):
                 self.root.after(1500, self._check_replay)
             elif res.get("state") == "watch" and match not in self.rofls:
                 self.reload_games(then=lambda: None)
@@ -811,7 +812,8 @@ class App:
                 self.tl.set_playhead((pb.get("time", 0) - offset) * 1000)
             elif self.tl:
                 self.tl.set_playhead(None)
-            self.root.after(1000, self._poll_local)
+            if self._alive:
+                self.root.after(1000, self._poll_local)
         threading.Thread(target=work, daemon=True).start()
 
     # timeline
@@ -1447,8 +1449,8 @@ class App:
         try:
             self._flush_note()
             g = self.root.geometry()
-            if _parse_geo(g) and self._on_screen(*_parse_geo(g)):
-                self.prefs.set("geometry", g)   # never remember off-screen
+            if window.remember(g):              # never off-screen
+                self.prefs.set("geometry", g)
             if self.job:
                 self.job.cancel()
         except Exception as e:

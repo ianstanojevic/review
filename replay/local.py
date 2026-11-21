@@ -36,7 +36,9 @@ COMPONENT = {"componentType": "replay-button_match-history"}
 
 
 class LocalError(Exception):
-    pass
+    def __init__(self, msg, status: int | None = None):
+        super().__init__(msg)
+        self.status = status
 
 
 class NotRunning(LocalError):
@@ -57,7 +59,8 @@ def _request(url: str, method: str = "GET", body=None, auth: str | None = None,
         with _OPENER.open(req, timeout=timeout) as r:
             raw = r.read()
     except urllib.error.HTTPError as e:
-        raise LocalError("%s %s -> HTTP %d" % (method, url, e.code)) from e
+        raise LocalError("%s %s -> HTTP %d" % (method, url, e.code),
+                         e.code) from e
     except (urllib.error.URLError, OSError, TimeoutError) as e:
         raise NotRunning(str(e)) from e
     if not raw:
@@ -157,7 +160,9 @@ REPLAY_STATE = {
     "missingOrExpired": "No longer available",
     "lost": "Not available",
     "unsupported": "Not supported",
-    "retry": "Download failed — retry",
+    "retryDownload": "Download failed — retry",
+    "found": "Checking…",
+    "maxLimitReached": "Replay folder full",
     "error": "Client error",
 }
 
@@ -188,14 +193,29 @@ class LeagueClient:
         return self.call("/lol-replays/v1/configuration") or {}
 
     def metadata(self, game_id: int) -> dict:
-        """{'state': 'watch'|'download'|…, 'downloadProgress': 0–100}"""
-        return self.call("/lol-replays/v1/metadata/%d" % game_id) or {}
+        """{'state': 'watch'|'download'|…, 'downloadProgress': 0–100}, or {}
+        for a game the client hasn't loaded yet (it answers 404 until it has
+        seen the game in match history, or we ``create_metadata`` it).
+        ``downloadProgress`` is only meaningful while downloading (checked
+        on 16.23: other states carry junk like 2349731080)."""
+        try:
+            md = self.call("/lol-replays/v1/metadata/%d" % game_id) or {}
+        except LocalError as e:
+            if e.status == 404:
+                return {}
+            raise
+        if md.get("state") != "downloading":
+            md.pop("downloadProgress", None)
+        elif isinstance(md.get("downloadProgress"), int):
+            md["downloadProgress"] = max(0, min(md["downloadProgress"], 100))
+        return md
 
     def create_metadata(self, game_id: int, match: dict) -> None:
         """Tell the client about a game it hasn't seen (opened outside its
         match history) so it can check/download the replay."""
         info = match.get("info", {})
-        body = {"gameId": game_id, "gameEnd": info.get("gameEndTimestamp", 0),
+        # LolReplaysReplayCreateMetadata on 16.23: exactly these four
+        body = {"gameEnd": info.get("gameEndTimestamp", 0),
                 "gameType": info.get("gameType", "MATCHED_GAME"),
                 "gameVersion": info.get("gameVersion", ""),
                 "queueId": info.get("queueId", 420)}
@@ -261,37 +281,46 @@ class ReplayAPI:
         'attached' (camera follows whatever is selected in the replay —
         click your champion once) or 'failed'.
 
-        Riot documents ``cameraAttached`` but not how to pick the unit;
-        newer clients expose ``selectionName`` in /replay/render. Use it
-        when it's there, otherwise fall back to attaching to the current
-        selection."""
+        Checked against the Replay API's OpenAPI spec on 16.23:
+        ``Render.selectionName`` "sets the selection to the given name, case
+        insensitive". The game takes the champion name in either form
+        ("MissFortune" from Riot's API or "Miss Fortune") and reads back the
+        display form; Riot IDs are rejected (reads back ""). So: champion
+        names first, compared without spaces/punctuation."""
         try:
             r = self.render()
         except LocalError:
             return "failed"
         if "selectionName" in r:
-            names = []
+            want = {_norm(champion)}
+            names = [champion]
             for p in self.players():
-                if (p.get("championName") or "").lower() == champion.lower() \
-                        or (riot_name and (p.get("riotIdGameName") or "")
-                            .lower() == riot_name.lower()):
-                    names += [p.get("riotIdGameName"), p.get("summonerName"),
-                              p.get("riotId"), p.get("championName")]
-            names += [riot_name, champion]
+                raw = (p.get("rawChampionName") or "").rsplit("_", 1)[-1]
+                if _norm(p.get("championName")) in want or _norm(raw) in want                         or (riot_name and _norm(p.get("riotIdGameName"))
+                            == _norm(riot_name)):
+                    want.add(_norm(p.get("championName")))
+                    names.insert(0, p.get("championName"))
+                    names += [p.get("riotIdGameName"), p.get("riotId")]
+            names.append(riot_name)
             seen = set()
             for n in names:
-                if not n or n.lower() in seen:
+                if not n or _norm(n) in seen:
                     continue
-                seen.add(n.lower())
+                seen.add(_norm(n))
                 try:
                     self.set_render(selectionName=n, cameraAttached=True)
-                    got = (self.render().get("selectionName") or "").lower()
+                    got = _norm(self.render().get("selectionName"))
                 except LocalError:
                     return "failed"
-                if got == n.lower():
+                if got and (got == _norm(n) or got in want):
                     return "locked"
         try:
             self.set_render(cameraAttached=True)
         except LocalError:
             return "failed"
         return "attached"
+
+
+def _norm(name) -> str:
+    """'Miss Fortune' / 'MissFortune' / "Kai'Sa" -> 'missfortune' / 'kaisa'."""
+    return re.sub(r"[^0-9a-z]", "", (name or "").lower())
