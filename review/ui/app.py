@@ -206,8 +206,9 @@ class App:
             w, h = min(w, max_w), min(h, max_h)
             if self._on_screen(w, h, x, y):
                 return "%dx%d+%d+%d" % (w, h, x, y)
-        w = min(px(1240), max_w - px(20))
-        h = min(px(900), max_h - px(10))
+        dw, dh = getattr(self, "default_size", (1240, 900))
+        w = min(px(dw), max_w - px(20))
+        h = min(px(dh), max_h - px(10))
         x = ax + max((aw - w - chrome_w) // 2, 0)
         y = ay + max((ah - h - chrome_h) // 2, 0)
         return "%dx%d+%d+%d" % (w, h, x, y)
