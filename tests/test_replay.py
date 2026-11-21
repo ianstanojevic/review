@@ -496,7 +496,7 @@ def test_follow_after_seek(server):
     assert api.follow("MissFortune") == "locked"
     api.set_playback(time=500)
     assert _Fake.state["render"]["selectionName"] == ""      # lost
-    assert api.follow_after_seek("MissFortune", settle=0) == "locked"
+    assert api.follow_after_seek("MissFortune") == "locked"
     assert _Fake.state["render"]["selectionName"] == "Miss Fortune"
 
 
@@ -523,7 +523,9 @@ def _ui_keep_on_me(a, errors, server):
                    "selectable": ("Kalista",), "players": [me]}
     a.rapi = local.ReplayAPI(server)
     a._offscreen = 0
-    a._keep_on_me(("Kalista", "Me"))                 # one glitch frame: wait
+    a.rapi.last_lock = 0.0
+    a._keep_on_me(("Kalista", "Me"))                 # glitch frames / pan:
+    a._keep_on_me(("Kalista", "Me"))                 # wait
     assert _Fake.state["render"]["selectionName"] == ""
     a._keep_on_me(("Kalista", "Me"))                 # still off: bring back
     assert _Fake.state["render"]["selectionName"] == "Kalista"

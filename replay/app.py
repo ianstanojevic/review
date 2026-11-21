@@ -852,7 +852,9 @@ class App:
         try:
             vis = self.rapi.on_screen(*me)
             self._offscreen = self._offscreen + 1 if vis is False else 0
-            if self._offscreen >= 2:
+            # the camera pans to you after a lock (up to ~8 s); re-locking
+            # during the pan restarts it, so wait before trying again
+            if self._offscreen >= 3 and                     time.monotonic() - self.rapi.last_lock > 9:
                 self._offscreen = 0
                 self.rapi.follow(*me)
         except local.LocalError:

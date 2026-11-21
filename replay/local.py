@@ -243,6 +243,7 @@ class LeagueClient:
 class ReplayAPI:
     def __init__(self, port: int = REPLAY_PORT):
         self.base = "https://127.0.0.1:%d" % port
+        self.last_lock = 0.0      # monotonic time of the last lock
 
     def _call(self, path, method="GET", body=None, timeout=1.5):
         return _request(self.base + path, method, body, None, timeout)
@@ -314,6 +315,7 @@ class ReplayAPI:
                 except LocalError:
                     return "failed"
                 if got and (got == _norm(n) or got in want):
+                    self.last_lock = time.monotonic()
                     return "locked"
         try:
             self.set_render(cameraAttached=True)
@@ -353,29 +355,13 @@ class ReplayAPI:
             return None
         return _visible(p.get("screenPositionCenter"))
 
-    def follow_after_seek(self, champion: str, riot_name: str = "",
-                          settle: float = 8.0, step: float = 0.5) -> str:
-        """Lock once the seek has finished. For a few seconds after a seek
-        the game keeps moving the camera (live: off screen for up to ~6 s
-        after a "locked" answer), so keep checking every ``step`` s for up
-        to ``settle`` s and lock again until you're on screen twice in a
-        row. Dead or not found: one lock and done."""
+    def follow_after_seek(self, champion: str, riot_name: str = "") -> str:
+        """Lock once the seek has finished — once. The camera then PANS to
+        you (live: 3-8 s from far away); locking again during the pan
+        restarts it, so callers must leave it alone for a while."""
         self.wait_seek()
-        r = self.follow(champion, riot_name)
-        if r != "locked":
-            return r
-        end, good = time.monotonic() + settle, 0
-        while time.monotonic() < end and good < 2:
-            time.sleep(step)
-            vis = self.on_screen(champion, riot_name)
-            if vis is None:
-                break
-            if vis:
-                good += 1
-            else:
-                good = 0
-                self.follow(champion, riot_name)
-        return r
+        time.sleep(0.3)
+        return self.follow(champion, riot_name)
 
 def _norm(name) -> str:
     """'Miss Fortune' / 'MissFortune' / "Kai'Sa" -> 'missfortune' / 'kaisa'."""
