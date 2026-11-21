@@ -13,6 +13,7 @@ class _Registry(dict):
         "winloss": ("winloss", "WinLossScreen"),
         "deaths": ("deaths", "DeathsScreen"),
         "radar": ("radarview", "RadarScreen"),
+        "compare": ("compare", "CompareScreen"),
         "lab": ("lab", "LabScreen"),
         "matches": ("matches", "MatchesScreen"),
     }

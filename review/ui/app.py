@@ -39,7 +39,8 @@ LEGAL = ("REVIEW isn't endorsed by Riot Games and doesn't reflect the views or "
 VIEWS = [("overview", "Overview"), ("lane", "Lane"),
          ("champions", "Champions"), ("trends", "Trends"),
          ("winloss", "Wins vs losses"), ("deaths", "Deaths"),
-         ("radar", "Radar"), ("lab", "Stats lab"), ("matches", "Matches")]
+         ("radar", "Radar"), ("compare", "Compare"), ("lab", "Stats lab"),
+         ("matches", "Matches")]
 VIEW_LABEL = dict(VIEWS)
 RANGES = [(None, "All"), (100, "Last 100"), (50, "Last 50"), (20, "Last 20")]
 PARTIAL_MIN = 20          # show results once this many games are cached
