@@ -110,16 +110,78 @@ class MiniMap(tk.Canvas):
                          outline=FG, width=1, tags="mk")
 
 
+GROUP_MS = 15_000         # events this close in time belong together
+GROUP_SPAN_MS = 40_000    # ...but one group never covers more than this
+STACK = 3                 # icons shown per group; the rest is "+N"
+
+
+def moment_row(mo) -> str:
+    """Upper track rows: 'me' (your kills/assists, on the line), 'ours'
+    (your team's objectives/towers, above), 'theirs' (enemy's, below)."""
+    if mo.kind in ("kill", "assist"):
+        return "me"
+    return "ours" if mo.ours else "theirs"
+
+
+def moment_rank(mo) -> int:
+    """Lower = more important (drawn nearest the line, listed first)."""
+    lab = mo.label.lower()
+    if mo.kind == "objective":
+        return 0 if ("baron" in lab or "elder" in lab) else 1
+    if mo.kind == "kill":
+        return 2
+    if mo.kind == "assist":
+        return 3
+    return 4 if "inhibitor" in lab else 5
+
+
+def group_moments(moments, x_of, min_gap: float):
+    """Bundle the upper track's moments so nothing overlaps.
+
+    Per row, events in time order join the open group when they are within
+    ``GROUP_MS`` of its last event (and ``GROUP_SPAN_MS`` of its first), or
+    when they would be drawn less than ``min_gap`` px from it. Returns
+    ``[(row, x, items)]``: x is the first event's position, items are
+    sorted most important first."""
+    out = []
+    for row in ("me", "ours", "theirs"):
+        cur = None
+        for mo in sorted((m for m in moments if m.kind != "death"
+                          and moment_row(m) == row), key=lambda m: m.t_ms):
+            x = x_of(mo.t_ms)
+            if cur is not None and (
+                    (mo.t_ms - cur[2][-1].t_ms <= GROUP_MS
+                     and mo.t_ms - cur[2][0].t_ms <= GROUP_SPAN_MS)
+                    or x - cur[1] < min_gap):
+                cur[2].append(mo)
+                continue
+            cur = [row, x, [mo]]
+            out.append(cur)
+    return [(r, x, sorted(it, key=lambda m: (moment_rank(m), m.t_ms)))
+            for r, x, it in out]
+
+
+def group_tip(items, limit: int = 8) -> str:
+    lines = ["%s  %s" % (m.time_text, m.label)
+             for m in sorted(items, key=lambda m: m.t_ms)]
+    if len(lines) > limit:
+        lines = lines[:limit] + ["… %d more" % (len(lines) - limit)]
+    return "\n".join(lines)
+
+
 class TimelineBar(tk.Canvas):
     """The whole game on one line. Lower track: your deaths (✕) and your
-    own marks; upper track: kills/assists (teal) and objectives/towers
-    (gold = your team, red = enemy). Gold line = where the replay is.
+    own marks. Upper track: your kills/assists (teal) on the line, your
+    team's objectives/towers (gold) stacked above it, the enemy's (red)
+    stacked below. Events close in time are one group: up to three icons,
+    then "+N"; hover lists them all, click jumps to the first. Gold line =
+    where the replay is.
 
     Click a marker -> ``on_pick(key)``; click elsewhere -> ``on_seek(ms)``.
     """
 
     def __init__(self, master, tooltip=None, on_pick=None, on_seek=None,
-                 bg=PANEL, height=96):
+                 bg=PANEL, height=134):
         super().__init__(master, bg=bg, highlightthickness=0, width=1,
                          height=px(height))
         self.tooltip, self.on_pick, self.on_seek = tooltip, on_pick, on_seek
@@ -171,8 +233,10 @@ class TimelineBar(tk.Canvas):
     # drawing
     # Layout (logical px, scaled by px()): label row, kills/objectives
     # track, label row, deaths/marks track, minute axis. Labels sit on their
-    # own rows so markers never cover them.
-    LBL1, TOP, LBL2, LOW, AXIS = 2, 25, 42, 64, 86
+    # own rows so markers never cover them. The upper track's stacks reach
+    # STACK_IN + (STACK - 1) * STACK_STEP above and below TOP.
+    LBL1, TOP, LBL2, LOW, AXIS = 2, 46, 80, 102, 124
+    STACK_IN, STACK_STEP = 9, 8
 
     def redraw(self):
         """The static picture is drawn with REVIEW's supersampled Pen (PIL,
@@ -196,7 +260,7 @@ class TimelineBar(tk.Canvas):
         while m <= mins:
             x = self._x(m * 60_000)
             if m:
-                pen.line([(x, top_y - px(8)), (x, low_y + px(8))], GRID,
+                pen.line([(x, top_y - px(28)), (x, low_y + px(8))], GRID,
                          width=px(1), alpha=110)
             pen.text(x, axis_y, "%d" % m, F_XS, DIM,
                      anchor="mm" if m else "lm")
@@ -208,25 +272,7 @@ class TimelineBar(tk.Canvas):
                  anchor="lt")
         pen.text(x0, px(self.LBL2), "YOUR DEATHS · MARKS", F_XS_B, lbl,
                  anchor="lt")
-        # upper track: objectives first, kills on top
-        r = px(3.5)
-        for mo in sorted((m for m in self.moments if m.kind != "death"),
-                         key=lambda m: m.kind in ("kill", "assist")):
-            x = self._x(mo.t_ms)
-            if mo.kind == "kill":
-                pen.circle(x, top_y, r, fill=GOOD)
-            elif mo.kind == "assist":
-                pen.circle(x, top_y, r - px(0.5), outline=GOOD,
-                           width=px(1.5))
-            else:
-                col = ACCENT if mo.ours else BAD
-                rr = r + px(1)
-                if mo.kind == "tower":
-                    col, rr = mix(col, self["bg"], 0.35), r
-                pen.diamond(x, top_y, rr, fill=col)
-            self.hits.append((x - r - 3, top_y - r - 4, x + r + 3,
-                              top_y + r + 4, None,
-                              "%s  %s" % (mo.time_text, mo.label)))
+        self._draw_moments(pen, top_y)
         # lower track: your deaths and marks
         R = px(5)
         from .model import KINDS, category_label
@@ -270,10 +316,53 @@ class TimelineBar(tk.Canvas):
         self.create_image(0, 0, image=self._photo, anchor="nw", tags="base")
         self._draw_heads()
 
+    def _draw_moments(self, pen, top_y):
+        """Upper track, grouped (see ``group_moments``)."""
+        bg = self["bg"]
+        r = px(3.5)
+        label_w = px(13)
+        gap = 2 * r + px(5) + label_w
+        step, inner = px(self.STACK_STEP), px(self.STACK_IN)
+        for row, x, items in group_moments(self.moments, self._x, gap):
+            n = len(items)
+            if row == "me":
+                kill = any(m.kind == "kill" for m in items)
+                if kill:
+                    pen.circle(x, top_y, r, fill=GOOD)
+                else:
+                    pen.circle(x, top_y, r - px(0.5), outline=GOOD,
+                               width=px(1.5))
+                ys = [top_y]
+                if n > 1:
+                    pen.text(x + r + px(2), top_y, "×%d" % n, F_XS_B, GOOD,
+                             anchor="lm")
+            else:
+                sign = -1 if row == "ours" else 1
+                shown = items[:STACK]
+                ys = [top_y + sign * (inner + i * step)
+                      for i in range(len(shown))]
+                # outermost first, so the most important sits on top
+                for mo, y in reversed(list(zip(shown, ys))):
+                    col = ACCENT if mo.ours else BAD
+                    rr = r + px(1)
+                    if mo.kind == "tower":
+                        col, rr = mix(col, bg, 0.35), r
+                    pen.diamond(x, y, rr + px(1.2), fill=bg)   # separates
+                    pen.diamond(x, y, rr, fill=col)
+                if n > STACK:
+                    pen.text(x + r + px(3), ys[-1], "+%d" % (n - STACK),
+                             F_XS_B, DIM, anchor="lm")
+            y_lo, y_hi = min(ys), max(ys)
+            right = label_w if (n > STACK or (row == "me" and n > 1)) else 0
+            self.hits.append((x - r - 3, y_lo - r - 3, x + r + 3 + right,
+                              y_hi + r + 3, ("seek", items and min(
+                                  m.t_ms for m in items)),
+                              group_tip(items)))
+
     def _draw_heads(self):
         self.delete("head")
         _, _, h = self._box()
-        y0, y1 = px(self.TOP - 10), px(self.LOW + 10)
+        y0, y1 = px(self.TOP - 30), px(self.LOW + 10)
         if self.cursor_ms is not None:
             x = round(self._x(self.cursor_ms))
             self.create_line(x, y0, x, y1, fill=DIM, dash=(2, 3),
@@ -297,6 +386,10 @@ class TimelineBar(tk.Canvas):
 
     def _click(self, e):
         h = self._hit(e.x, e.y)
+        if h and isinstance(h[0], tuple) and h[0][0] == "seek":
+            if self.on_seek:
+                self.on_seek(h[0][1])
+            return
         if h and h[0] is not None:
             if self.on_pick:
                 self.on_pick(h[0])

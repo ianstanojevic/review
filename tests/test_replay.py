@@ -529,3 +529,41 @@ def _ui_keep_on_me(a, errors, server):
     assert _Fake.state["render"]["selectionName"] == ""
     a._keep_on_me(("Kalista", "Me"))                 # still off: bring back
     assert _Fake.state["render"]["selectionName"] == "Kalista"
+
+
+def test_timeline_groups():
+    from replay.events import Moment
+    from replay.widgets import STACK, group_moments, group_tip, moment_row
+
+    ms = [Moment(60_000, "kill", "Killed Ahri"),
+          Moment(64_000, "assist", "Assist on Zed"),
+          Moment(70_000, "kill", "Killed Lux"),
+          Moment(600_000, "kill", "Killed Ahri"),
+          Moment(300_000, "tower", "Lost: Mid tower", ours=False),
+          Moment(310_000, "objective", "Enemy took Baron", ours=False),
+          Moment(312_000, "tower", "Lost: Inhibitor", ours=False),
+          Moment(320_000, "tower", "Lost: Top tower", ours=False),
+          Moment(305_000, "objective", "Your team took Fire dragon"),
+          Moment(30_000, "death", "You died")]
+    x_of = lambda t: t / 1000            # 1 px per second
+    gs = group_moments(ms, x_of, min_gap=10)
+    rows = [(r, x, [m.label for m in it]) for r, x, it in gs]
+    # me: the fight at 1:00-1:10 is one group, the later kill its own
+    assert rows[0] == ("me", 60, ["Killed Ahri", "Killed Lux",
+                                  "Assist on Zed"])
+    assert rows[1][:2] == ("me", 600)
+    # sides never mix; enemy push is one group, Baron first
+    assert rows[2] == ("ours", 305, ["Your team took Fire dragon"])
+    r, x, labels = rows[3]
+    assert (r, x) == ("theirs", 300) and labels[0] == "Enemy took Baron"
+    assert labels[1] == "Lost: Inhibitor" and len(labels) == 4 > STACK
+    assert len(gs) == 4 and all(moment_row(m) == r for r, _, it in gs
+                                for m in it)
+    # pixel crowding merges even when far apart in time
+    near = [Moment(0, "kill", "a"), Moment(100_000, "kill", "b")]
+    assert len(group_moments(near, lambda t: t / 100_000, 10)) == 1
+    # span cap: a chain of kills 10 s apart splits after 40 s
+    chain = [Moment(i * 10_000, "kill", str(i)) for i in range(8)]
+    assert len(group_moments(chain, x_of, 1)) == 2
+    tip = group_tip(chain, limit=3)
+    assert tip.splitlines()[0] == "0:00  0" and tip.endswith("… 5 more")
