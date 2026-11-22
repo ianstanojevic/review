@@ -119,7 +119,7 @@ class TimelineBar(tk.Canvas):
     """
 
     def __init__(self, master, tooltip=None, on_pick=None, on_seek=None,
-                 bg=PANEL, height=86):
+                 bg=PANEL, height=96):
         super().__init__(master, bg=bg, highlightthickness=0, width=1,
                          height=px(height))
         self.tooltip, self.on_pick, self.on_seek = tooltip, on_pick, on_seek
@@ -169,78 +169,94 @@ class TimelineBar(tk.Canvas):
         return (x - x0) / max(x1 - x0, 1) * self.duration_ms
 
     # drawing
+    # Layout (logical px, scaled by px()): label row, kills/objectives
+    # track, label row, deaths/marks track, minute axis. Labels sit on their
+    # own rows so markers never cover them.
+    LBL1, TOP, LBL2, LOW, AXIS = 2, 25, 42, 64, 86
+
     def redraw(self):
+        """The static picture is drawn with REVIEW's supersampled Pen (PIL,
+        antialiased: Tk's canvas draws jagged diagonals and circles); the
+        playhead stays a canvas item so it can move every second cheaply."""
+        from PIL import ImageTk
+        from review.theme.pen import Pen
         self.delete("all")
         self.hits = []
         x0, x1, h = self._box()
         if x1 - x0 < 20:
             return
-        top_y, low_y = px(22), px(52)
-        axis_y = h - px(14)
-        # tracks
-        for y in (top_y, low_y):
-            self.create_line(x0, y, x1, y, fill=GRID, width=px(2))
-        self.create_line(x0, axis_y - px(6), x1, axis_y - px(6), fill=EDGE)
+        w = self.winfo_width()
+        pen = Pen(w, h, bg=self["bg"], ss=3)
+        top_y, low_y, axis_y = px(self.TOP), px(self.LOW), px(self.AXIS)
+        lbl = mix(DIM, self["bg"], 0.15)
+        # minute guides (faint, behind everything) + axis labels
         mins = self.duration_ms / 60_000
         step = 5 if mins <= 45 else 10
         m = 0
         while m <= mins:
             x = self._x(m * 60_000)
-            self.create_line(x, axis_y - px(9), x, axis_y - px(3), fill=EDGE)
-            self.create_text(x, axis_y + px(2), text="%d" % m, fill=DIM,
-                             font=F_XS, anchor="n" if 0 < m else "nw")
+            if m:
+                pen.line([(x, top_y - px(8)), (x, low_y + px(8))], GRID,
+                         width=px(1), alpha=110)
+            pen.text(x, axis_y, "%d" % m, F_XS, DIM,
+                     anchor="mm" if m else "lm")
             m += step
-        self.create_text(x0, px(4), text="KILLS · OBJECTIVES", fill=DIM,
-                         font=F_XS_B, anchor="nw")
-        self.create_text(x0, low_y - px(16), text="YOUR DEATHS · MARKS",
-                         fill=DIM, font=F_XS_B, anchor="nw")
-        r = px(4)
-        for mo in self.moments:
-            if mo.kind == "death":
-                continue
+        # tracks: thin, quiet
+        for y in (top_y, low_y):
+            pen.line([(x0, y), (x1, y)], GRID, width=px(1.5))
+        pen.text(x0, px(self.LBL1), "KILLS · OBJECTIVES", F_XS_B, lbl,
+                 anchor="lt")
+        pen.text(x0, px(self.LBL2), "YOUR DEATHS · MARKS", F_XS_B, lbl,
+                 anchor="lt")
+        # upper track: objectives first, kills on top
+        r = px(3.5)
+        for mo in sorted((m for m in self.moments if m.kind != "death"),
+                         key=lambda m: m.kind in ("kill", "assist")):
             x = self._x(mo.t_ms)
-            if mo.kind in ("kill", "assist"):
-                col = GOOD if mo.kind == "kill" else mix(GOOD, PANEL, 0.45)
-                self.create_oval(x - r, top_y - r, x + r, top_y + r,
-                                 fill=col, outline="")
+            if mo.kind == "kill":
+                pen.circle(x, top_y, r, fill=GOOD)
+            elif mo.kind == "assist":
+                pen.circle(x, top_y, r - px(0.5), outline=GOOD,
+                           width=px(1.5))
             else:
                 col = ACCENT if mo.ours else BAD
+                rr = r + px(1)
                 if mo.kind == "tower":
-                    col = mix(col, PANEL, 0.4)
-                self.create_polygon(x, top_y - r - 1, x + r + 1, top_y,
-                                    x, top_y + r + 1, x - r - 1, top_y,
-                                    fill=col, outline="")
-            self.hits.append((x - r - 2, top_y - r - 3, x + r + 2,
-                              top_y + r + 3, None,
+                    col, rr = mix(col, self["bg"], 0.35), r
+                pen.diamond(x, top_y, rr, fill=col)
+            self.hits.append((x - r - 3, top_y - r - 4, x + r + 3,
+                              top_y + r + 4, None,
                               "%s  %s" % (mo.time_text, mo.label)))
-        R = px(7)
+        # lower track: your deaths and marks
+        R = px(5)
+        from .model import KINDS, category_label
         for mk in self.marks:
             x = self._x(mk.t_ms)
             col = MARK_COLOR.get(mk.kind, FG)
-            sel = self.selected == mk.id
-            if sel:
-                self.create_rectangle(x - R - 3, low_y - R - 3, x + R + 3,
-                                      low_y + R + 3, outline=EDGE_HI,
-                                      width=2)
+            if self.selected == mk.id:
+                pen.circle(x, low_y, R + px(4.5), fill=mix(EDGE_HI,
+                                                         self["bg"], 0.82))
+                pen.circle(x, low_y, R + px(4.5), outline=EDGE_HI,
+                           width=px(1.5))
             if mk.kind == DEATH:
-                w = px(3) if mk.tagged else px(2)
-                c = col if mk.tagged else mix(col, PANEL, 0.25)
-                self.create_line(x - R + 2, low_y - R + 2, x + R - 2,
-                                 low_y + R - 2, fill=c, width=w)
-                self.create_line(x - R + 2, low_y + R - 2, x + R - 2,
-                                 low_y - R + 2, fill=c, width=w)
+                c = col if mk.tagged else mix(col, self["bg"], 0.35)
+                wd = px(2.2) if mk.tagged else px(1.8)
+                pen.line([(x - R, low_y - R), (x + R, low_y + R)], c, wd)
+                pen.line([(x - R, low_y + R), (x + R, low_y - R)], c, wd)
+                for ex, ey in ((x - R, low_y - R), (x + R, low_y + R),
+                               (x - R, low_y + R), (x + R, low_y - R)):
+                    pen.circle(ex, ey, wd / 2, fill=c)      # round caps
                 if not mk.tagged:
-                    self.create_oval(x + R - 3, low_y - R - 1, x + R + 1,
-                                     low_y - R + 3, fill=EDGE_HI, outline="")
+                    pen.circle(x + R + px(2.5), low_y - R - px(1), px(1.8),
+                               fill=EDGE_HI)
             elif mk.kind == MISSED:
-                self.create_polygon(x, low_y - R, x + R, low_y + R - 1,
-                                    x - R, low_y + R - 1,
-                                    fill=col if mk.tagged else PANEL,
-                                    outline=col, width=2)
+                tri = [(x, low_y - R - px(1)), (x + R + px(1), low_y + R),
+                       (x - R - px(1), low_y + R)]
+                pen.poly(tri, fill=col if mk.tagged else None,
+                         outline=col, width=px(1.6))
             else:
-                self.create_rectangle(x - R + 2, low_y - R + 2, x + R - 2,
-                                      low_y + R - 2, fill=col, outline="")
-            from .model import KINDS, category_label
+                pen.rect(x - R + px(1), low_y - R + px(1), x + R - px(1),
+                         low_y + R - px(1), fill=col)
             cat = category_label(mk.kind, mk.category)
             tip = "%s  %s%s%s" % (fmt_time(mk.t_ms / 1000),
                                   KINDS.get(mk.kind, mk.kind),
@@ -248,25 +264,25 @@ class TimelineBar(tk.Canvas):
                                   (" · untagged" if mk.kind != BOOKMARK
                                    else ""),
                                   ("\n" + mk.note) if mk.note else "")
-            self.hits.append((x - R - 2, low_y - R - 3, x + R + 2,
-                              low_y + R + 3, mk.id, tip))
+            self.hits.append((x - R - 4, low_y - R - 5, x + R + 4,
+                              low_y + R + 5, mk.id, tip))
+        self._photo = ImageTk.PhotoImage(pen.finish(), master=self)
+        self.create_image(0, 0, image=self._photo, anchor="nw", tags="base")
         self._draw_heads()
 
     def _draw_heads(self):
         self.delete("head")
         _, _, h = self._box()
+        y0, y1 = px(self.TOP - 10), px(self.LOW + 10)
         if self.cursor_ms is not None:
-            x = self._x(self.cursor_ms)
-            self.create_line(x, px(14), x, h - px(20), fill=DIM, dash=(2, 3),
+            x = round(self._x(self.cursor_ms))
+            self.create_line(x, y0, x, y1, fill=DIM, dash=(2, 3),
                              tags="head")
         if self.playhead_ms is not None:
-            x = self._x(self.playhead_ms)
-            self.create_line(x, px(12), x, h - px(18), fill=EDGE_HI,
-                             width=2, tags="head")
-            self.create_polygon(x - px(5), px(8), x + px(5), px(8), x,
-                                px(14), fill=EDGE_HI, outline="",
-                                tags="head")
-            self.create_text(x + px(7), px(4), text=fmt_time(
+            x = round(self._x(self.playhead_ms))
+            self.create_line(x, y0, x, y1, fill=EDGE_HI, width=px(1.5),
+                             tags="head")
+            self.create_text(x + px(5), px(self.LBL1), text=fmt_time(
                 self.playhead_ms / 1000), fill=EDGE_HI, font=F_XS_B,
                 anchor="nw", tags="head")
 
