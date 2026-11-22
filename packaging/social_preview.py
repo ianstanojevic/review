@@ -3,9 +3,12 @@ in DRAFT's style: navy background, thin gold frame, the REVIEW wordmark and
 tagline on the left, the app bleeding off the right edge.
 
     python packaging/social_preview.py SCREENSHOT.png [OUT.png]
+        [--title REPLAY] [--line "..."]... [--tagline "..."]
+        [--crop x0,y0,x1,y1]
 
-SCREENSHOT is a full-window capture (e.g. from `python -m review.ui
---snapshot`). Writes docs/github/social-preview.png (1280x640) by default.
+SCREENSHOT is a full-window capture (e.g. from `--snapshot`). --crop zooms
+in on part of it (DRAFT's preview shows a readable top-left corner, not the
+whole window). Writes docs/github/social-preview.png (1280x640) by default.
 """
 from __future__ import annotations
 
@@ -39,7 +42,10 @@ def spaced(d, xy, text, f, fill, spacing):
     return x
 
 
-def main(shot: str, out: str | None = None) -> Path:
+def main(shot: str, out: str | None = None, title: str = "REVIEW",
+         lines=("Ranked account analyzer", "for League of Legends"),
+         tagline: str = "Compare yourself with Gold to Master+",
+         crop=None) -> Path:
     out = Path(out or ROOT / "docs" / "github" / "social-preview.png")
     im = Image.new("RGB", (W * SS, H * SS), NAVY)
     # soft vignette glow behind the app
@@ -52,7 +58,8 @@ def main(shot: str, out: str | None = None) -> Path:
 
     # the app, right side, bleeding off the edge, with a gold hairline
     app = Image.open(shot).convert("RGB")
-    app = app.crop((0, 48, app.width, app.height))      # drop the title bar
+    app = app.crop(tuple(crop) if crop else
+                   (0, 48, app.width, app.height))    # drop the title bar
     ah = int(560 * SS)
     aw = int(app.width * ah / app.height)
     app = app.resize((aw, ah), Image.LANCZOS)
@@ -72,8 +79,9 @@ def main(shot: str, out: str | None = None) -> Path:
 
     # text block on the left
     x0 = 64 * SS
-    title = font("georgiab.ttf", 74)
-    end = spaced(d, (x0, 205 * SS), "REVIEW", title, GOLD, 9 * SS)
+    title_f = title
+    title = font("georgiab.ttf", 74 if len(title_f) <= 6 else 66)
+    end = spaced(d, (x0, 205 * SS), title_f, title, GOLD, 9 * SS)
     ry = 312 * SS
     d.line([(x0, ry), (min(end, x0 + 430 * SS), ry)], fill=GOLD_DIM,
            width=2 * SS)
@@ -82,14 +90,13 @@ def main(shot: str, out: str | None = None) -> Path:
     d.polygon([(x0, ry - r), (x0 + r, ry), (x0, ry + r), (x0 - r, ry)],
               fill=GOLD)
     body = font("segoeui.ttf", 30)
-    for i, line in enumerate(("Ranked account analyzer",
-                              "for League of Legends")):
+    for i, line in enumerate(lines):
         d.text((x0, (340 + i * 40) * SS), line, font=body, fill=FG)
+    ty = 340 + len(lines) * 40 + 26
     small = font("segoeuisb.ttf" if (FONTS / "segoeuisb.ttf").exists()
                  else "segoeuib.ttf", 21)
-    d.text((x0, 446 * SS), "Compare yourself with Gold to Master+",
-           font=small, fill=TEAL)
-    d.text((x0, 478 * SS), "Free  ·  Windows  ·  no install",
+    d.text((x0, ty * SS), tagline, font=small, fill=TEAL)
+    d.text((x0, (ty + 32) * SS), "Free  ·  Windows  ·  no install",
            font=font("segoeui.ttf", 20), fill=DIM)
 
     # left fade so text never sits on the screenshot; thin gold frame
@@ -120,4 +127,16 @@ def main(shot: str, out: str | None = None) -> Path:
 
 
 if __name__ == "__main__":
-    main(sys.argv[1], sys.argv[2] if len(sys.argv) > 2 else None)
+    import argparse
+    ap = argparse.ArgumentParser()
+    ap.add_argument("shot")
+    ap.add_argument("out", nargs="?")
+    ap.add_argument("--title", default="REVIEW")
+    ap.add_argument("--line", action="append")
+    ap.add_argument("--tagline", default="Compare yourself with Gold to "
+                    "Master+")
+    ap.add_argument("--crop")
+    a = ap.parse_args()
+    main(a.shot, a.out, a.title,
+         a.line or ("Ranked account analyzer", "for League of Legends"),
+         a.tagline, [int(v) for v in a.crop.split(",")] if a.crop else None)
