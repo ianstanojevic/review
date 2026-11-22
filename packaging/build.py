@@ -90,8 +90,9 @@ INSTALL_HIGHLIGHTS = """HIGHLIGHTS – så kommer du igång
 4. Starta League-klienten, välj en match, bocka i de höjdpunkter du vill
    ha och tryck "Record selected". Klippen hamnar i Videos\\Highlights.
 
-Inspelningen sker i realtid via League: rör inte repriset medan ett klipp
-spelas in. Replays fungerar bara på samma patch som matchen spelades.
+Inspelningen sker i realtid via League. Highlights lägger repriset överst
+medan ett klipp spelas in (League spelar bara in när fönstret syns) – rör
+inte repriset och klicka inte bort det förrän klippet är klart. Replays fungerar bara på samma patch som matchen spelades.
 """
 
 

@@ -4,18 +4,29 @@ Flow (all on a worker thread, cancellable between and inside clips):
 
 1. ``open_replay``: the same path as REPLAY's Watch — ask the client about
    the game (``create`` it if the client hasn't seen it), download if
-   needed, ``watch``, then wait for the Replay API (it answers 404 for
-   ~20 s while the game loads).
+   needed, ``watch``, then wait for the Replay API (checked live: ~28 s
+   from Watch until it answers).
 2. per clip: seek to a little before the clip → ``follow_after_seek``
-   (camera on you; it pans for a few seconds) → start the recorder with
-   the clip's start/end times → wait (real time) → stop → move the file
-   into place. No seeks or camera locks while a clip is recording.
+   (camera on you; it pans for a few seconds) → let it play up to the
+   clip's start → make sure League's window is on screen → start the
+   recorder *now* with the clip's end time → the game stops by itself at
+   the end → the file is at ``path``. No seeks or camera calls while a clip
+   is recording.
 
-The Replay API's ``/replay/recording`` (Riot's ``Recording`` schema):
-``recording`` on/off, ``startTime``/``endTime`` in replay seconds,
-``codec`` (webm), ``framesPerSecond``, ``width``, ``height``, ``lossless``,
-``enforceFrameRate``, ``replaySpeed`` and ``path``; GET also reports
-``currentTime``. Checked live: see docs/HIGHLIGHTS.md.
+What the game does (16.23, checked live 2026-11-22, see docs/HIGHLIGHTS.md):
+
+* ``startTime: -1`` = start now. Any other ``startTime`` makes the game
+  seek there itself, and a seek drops the camera lock — so we never send
+  one.
+* It stops by itself at ``endTime`` (``recording`` turns false).
+* ``width``/``height`` are the game window's size; sending them does
+  nothing. The window must be on screen: a full-screen game in the
+  background shrinks to 1×1 and the recorder silently records nothing
+  (reads back 16×0, ``recording`` false) → ``gamewindow.bring_to_front``.
+* ``enforceFrameRate: true`` stamps every rendered frame 1/60 s apart even
+  when the PC renders fewer per second, so clips came out ~1.3× too fast
+  (10 s of game → 8.0 s of video). ``false`` keeps real time (10 s →
+  10.09 s) at whatever frame rate the PC manages while encoding.
 """
 from __future__ import annotations
 
@@ -29,15 +40,15 @@ from pathlib import Path
 
 from replay import local
 
+from . import gamewindow
+
 PREROLL_S = 7.0           # seek this far before the clip: camera pans to you
 STOP_GRACE_S = 6.0        # past endTime before we stop it ourselves
 LOAD_TIMEOUT_S = 240.0    # download + game start
+WINDOW_WAIT_S = 60.0      # for the user to bring League's window back
+FPS = 60
 CANT_RECORD = {"incompatible", "missingOrExpired", "lost", "unsupported",
                "error", "maxLimitReached"}
-
-RESOLUTIONS = [((1280, 720), "720p"), ((1920, 1080), "1080p"),
-               ((2560, 1440), "1440p")]
-FPS = [(30, "30 fps"), (60, "60 fps")]
 
 
 class Cancelled(Exception):
@@ -177,19 +188,21 @@ def _wait(cancel: threading.Event, secs: float, deadline: float | None = None,
 
 class Recorder:
     """Records clips one after another. ``on_progress(Progress)`` is called
-    from the worker thread."""
+    from the worker thread. ``front()`` puts League's window on screen and
+    says whether it is (injected in tests)."""
 
     def __init__(self, rapi: local.ReplayAPI, champion: str, riot_name: str,
-                 width: int = 1920, height: int = 1080, fps: int = 60,
-                 on_progress=lambda p: None,
+                 fps: int = FPS, on_progress=lambda p: None,
                  cancel: threading.Event | None = None,
-                 poll: float = 0.25):
+                 poll: float = 0.25, front=None, visible=None):
         self.rapi = rapi
         self.me = (champion, riot_name)
-        self.width, self.height, self.fps = width, height, fps
+        self.fps = fps
         self.on_progress = on_progress
         self.cancel = cancel or threading.Event()
         self.poll = poll
+        self.front = front or gamewindow.bring_to_front
+        self.visible = visible or gamewindow.visible
 
     def record_all(self, clips: list[Clip]) -> list[ClipResult]:
         out: list[ClipResult] = []
@@ -219,24 +232,34 @@ class Recorder:
         prog = self.on_progress
         if self._recording():
             self._stop_quietly()
+        self._window(i, n, c)
         prog(Progress("seeking", i, n, 0, c.title))
         rapi.set_playback(time=max(c.start_s - PREROLL_S, 0), paused=False,
                           speed=1.0)
         prog(Progress("camera", i, n, 0, c.title))
         rapi.follow_after_seek(*me)
-        _wait(self.cancel, 0)
+        # let it play (the camera pans to you) up to the clip's start
+        while rapi.playback().get("time", c.start_s) < c.start_s - 0.1:
+            _wait(self.cancel, 0.05)
+        self._window(i, n, c)
         c.target.parent.mkdir(parents=True, exist_ok=True)
         if c.target.exists():
             c.target.unlink()
         started = time.time()
-        # the game starts and stops on its own at start/endTime; no seeks or
-        # camera calls from here until it's done
-        rapi._call("/replay/recording", "POST", {
-            "recording": True, "startTime": float(c.start_s),
-            "endTime": float(c.end_s), "codec": "webm",
-            "framesPerSecond": int(self.fps), "width": int(self.width),
-            "height": int(self.height), "enforceFrameRate": True,
-            "lossless": False, "replaySpeed": 1.0, "path": str(c.target)})
+        # startTime -1 = now (any other value makes the game seek, which
+        # drops the camera lock); the game stops by itself at endTime. No
+        # seeks or camera calls from here until it's done.
+        st = rapi._call("/replay/recording", "POST", {
+            "recording": True, "startTime": -1.0, "endTime": float(c.end_s),
+            "codec": "webm", "framesPerSecond": int(self.fps),
+            "enforceFrameRate": False, "lossless": False,
+            "replaySpeed": 1.0, "path": str(c.target)}) or {}
+        if not st.get("recording"):
+            st = self._state()
+            if not st.get("recording"):
+                raise OSError("League didn't start recording — its window "
+                              "is probably hidden (reads %sx%s)"
+                              % (st.get("width"), st.get("height")))
         length = max(c.end_s - c.start_s, 0.1)
         while True:
             _wait(self.cancel, self.poll)
@@ -246,13 +269,26 @@ class Recorder:
                 now = rapi.playback().get("time", 0.0)
             prog(Progress("recording", i, n, max(0.0, min(
                 (now - c.start_s) / length, 1.0)), c.title))
-            if not st.get("recording") and now >= c.end_s - 0.5:
+            if not st.get("recording"):
                 break
             if now >= c.end_s + STOP_GRACE_S:
                 self._stop_quietly()
                 break
         prog(Progress("saving", i, n, 1.0, c.title))
         return self._collect(c, st, started)
+
+    def _window(self, i, n, c: Clip):
+        """League's window must be on screen to be recorded. Bring it up;
+        if Windows won't let us, ask the user and wait."""
+        if self.visible() or self.front():
+            return
+        self.on_progress(Progress("window", i, n, 0, c.title))
+        end = time.monotonic() + WINDOW_WAIT_S
+        while not self.visible():
+            _wait(self.cancel, 0.5)
+            if time.monotonic() > end:
+                raise OSError("League's replay window stayed hidden — "
+                              "recording needs it on screen")
 
     # ---- helpers
     def _state(self) -> dict:

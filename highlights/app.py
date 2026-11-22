@@ -666,26 +666,13 @@ class App:
             tk.Label(line, text="●  Record selected", bg=PANEL2,
                      fg=mix(DIM, PANEL, 0.4), font=F_SM_B, padx=14,
                      pady=6).pack(side="right")
-        w, h = self._resolution()
-        tk.Label(box, text="%d×%d · %d fps · saved to %s" % (
-            w, h, self._fps(), self.out_dir() / score.folder_name(
-                self.game)), bg=PANEL, fg=DIM, font=F_XS).pack(
-            anchor="e", pady=(SP_XS, 0))
+        tk.Label(box, text="League comes to the front while it records "
+                 "(video size = its window) · saved to %s" % (
+                     self.out_dir() / score.folder_name(self.game)),
+                 bg=PANEL, fg=DIM, font=F_XS).pack(anchor="e",
+                                                   pady=(SP_XS, 0))
 
     # ------------------------------------------------------- recording
-    def _resolution(self) -> tuple[int, int]:
-        r = self.prefs.get("resolution", [1920, 1080])
-        try:
-            return int(r[0]), int(r[1])
-        except (TypeError, ValueError, IndexError):
-            return 1920, 1080
-
-    def _fps(self) -> int:
-        try:
-            return int(self.prefs.get("fps", 60))
-        except (TypeError, ValueError):
-            return 60
-
     def record(self):
         g = self.game
         if g is None or self.rec is not None:
@@ -713,8 +700,6 @@ class App:
         self._render_actions()
         champs = {p.champion for p in g.players.values()}
         me = (g.me.champion, g.me.riot_id.split("#")[0])
-        w, h = self._resolution()
-        fps = self._fps()
         prog = lambda p: self.post(self._on_progress, p)    # noqa: E731
 
         def work():
@@ -727,8 +712,7 @@ class App:
                     recorder.open_replay(
                         self.lcu, self.rapi, g.game_id, self.match, champs,
                         cancel, status=lambda m: self.post(self._on_load, m))
-                    rec = recorder.Recorder(self.rapi, *me, width=w,
-                                            height=h, fps=fps,
+                    rec = recorder.Recorder(self.rapi, *me,
                                             on_progress=prog, cancel=cancel)
                     res = rec.record_all(clips)
             except recorder.Cancelled:
@@ -791,6 +775,8 @@ class App:
         else:
             c = r["clips"][min(p.index, n - 1)]
             verb = {"seeking": "Jumping to", "camera": "Camera on you for",
+                    "window": "Click League's replay window — waiting to "
+                    "record",
                     "recording": "● Recording", "saving": "Saving",
                     "error": "Failed:", "done": "Done",
                     "cancelled": "Cancelled"}.get(p.phase, p.phase)
@@ -804,6 +790,13 @@ class App:
 
     def _finished(self, results: list[ClipResult], err: str | None,
                   cancelled: bool):
+        if not self.demo:                # League was in front while recording
+            try:
+                self.root.deiconify()
+                self.root.lift()
+                self.root.focus_force()
+            except tk.TclError:
+                pass
         self.rec = None
         self.cancel = None
         self.results = results
@@ -947,19 +940,13 @@ class App:
         body = tk.Frame(d, bg=PANEL, padx=px(16), pady=px(12))
         body.pack(padx=1, pady=1)
         W.section_title(body, "SETTINGS", EDGE_HI)
-        W.caption(body, "VIDEO SIZE", pady=(0, SP_XS))
-        res = W.TabRow(body, None, [("%dx%d" % wh, lab) for wh, lab in
-                                    recorder.RESOLUTIONS],
-                       "%dx%d" % self._resolution(), style="teal", bg=PANEL,
-                       small=True)
-        res.pack(anchor="w")
-        W.caption(body, "FRAME RATE")
-        fps = W.TabRow(body, None, recorder.FPS, self._fps(), style="teal",
-                       bg=PANEL, small=True)
-        fps.pack(anchor="w")
-        tk.Label(body, text="The game renders the clip at this size, so "
-                 "1440p only looks sharper if League runs at 1440p or more.",
-                 bg=PANEL, fg=DIM, font=F_XS, wraplength=px(380),
+        W.caption(body, "VIDEO", pady=(0, SP_XS))
+        tk.Label(body, text="League records its own window: the video is "
+                 "as big as League's window (Video settings in the game), "
+                 "in real time, as smooth as your PC renders while "
+                 "encoding. Highlights brings the replay to the front for "
+                 "each clip — leave it there until the clip is done.",
+                 bg=PANEL, fg=FG, font=F_SM, wraplength=px(380),
                  justify="left").pack(anchor="w")
         fields = {}
 
@@ -991,9 +978,6 @@ class App:
               "client's lockfile).")
 
         def save():
-            w, h = (int(v) for v in res.value.split("x"))
-            self.prefs.set("resolution", [w, h])
-            self.prefs.set("fps", int(fps.value))
             for k, e in fields.items():
                 self.prefs.set(k, e.get().strip())
             self.install = local.install_dir(self.prefs.get("league_dir"))

@@ -176,9 +176,13 @@ def test_real_games():
 
 # ====================================================== fake game + client
 class _Fake(http.server.BaseHTTPRequestHandler):
-    """Replay API + LCU in one. Replay time runs SCALE× wall time; the
-    recorder writes its file when the clock passes endTime (to ``path``, or
-    to ``alt_dir`` like a game that ignores the path)."""
+    """Replay API + LCU in one, behaving like the game did live (16.23).
+    Replay time runs SCALE× wall time. Recording: ``startTime`` -1 = now,
+    any other value seeks there (and drops the camera lock); it stops by
+    itself at ``endTime`` and writes the file (to ``path``, or to
+    ``alt_dir`` like a game that ignores the path); with ``hidden`` (a
+    full-screen game in the background) it reads back 16×0 and never
+    starts."""
     SCALE = 25.0
     s: dict = {}
     log: list = []
@@ -218,6 +222,7 @@ class _Fake(http.server.BaseHTTPRequestHandler):
         r, now = self.s["rec"], self.now()
         if r.get("recording") and now >= r["endTime"]:
             r["recording"] = False
+            r["endTime"] = -1.0
             out = Path(r["path"])
             if self.s.get("alt_dir"):
                 out = Path(self.s["alt_dir"]) / "game-chose-this.webm"
@@ -264,7 +269,7 @@ class _Fake(http.server.BaseHTTPRequestHandler):
         with self.lock:
             self._tick_recording()
             self.log.append(("POST", self.path, body,
-                             bool(s["rec"].get("recording"))))
+                             bool(s["rec"].get("recording")), self.now()))
             if self.path == "/replay/playback":
                 s["t"], s["at"] = self.now(), time.monotonic()
                 if "time" in body:
@@ -282,8 +287,18 @@ class _Fake(http.server.BaseHTTPRequestHandler):
                 s["render"].update(body)
                 return self._send(s["render"])
             if self.path == "/replay/recording":
-                s["rec"] = dict(body) if body.get("recording") else dict(
-                    s["rec"], recording=False)
+                if not body.get("recording"):
+                    s["rec"] = dict(s["rec"], recording=False)
+                elif s.get("hidden"):
+                    s["rec"] = dict(body, recording=False, width=16,
+                                    height=0)
+                else:
+                    if body.get("startTime", -1) >= 0:      # it seeks
+                        s["t"], s["at"] = body["startTime"], time.monotonic()
+                        s["render"].update(selectionName="")
+                    s["rec"] = dict(body, recording=True, width=1440,
+                                    height=900)
+                    s["rec_from"] = self.now()
                 return self._send(s["rec"])
             if self.path.endswith("/download/graceful"):
                 s["state"] = "downloading"
@@ -319,30 +334,45 @@ def _client(port, folder: Path) -> local.LeagueClient:
 def _no_camera_or_seek_while_recording():
     bad = [x for x in _Fake.log if x[0] == "POST" and x[3]
            and x[1] in ("/replay/playback", "/replay/render")]
+    bad += [x for x in _Fake.log if x[0] == "POST" and x[1] ==
+            "/replay/recording" and x[2].get("startTime", -1) >= 0]
     assert not bad, bad
 
 
 # ================================================================ recorder
+def _rec(port, *a, **k):
+    """A Recorder that never touches a real League window."""
+    k.setdefault("poll", 0.05)
+    k.setdefault("front", lambda: True)
+    k.setdefault("visible", lambda: True)
+    return Recorder(local.ReplayAPI(port), *a, **k)
+
+
 def test_record_clips(fake, tmp_path):
     _Fake.reset()
     events = []
-    rec = Recorder(local.ReplayAPI(fake), "Jinx", "x0", 1280, 720, 30,
-                   on_progress=events.append, poll=0.05)
+    rec = _rec(fake, "Jinx", "x0", on_progress=events.append)
     clips = [Clip(100, 112, tmp_path / "g" / "1m_kill.webm", "Kill"),
              Clip(300, 320, tmp_path / "g" / "5m_baron.webm", "Baron")]
     res = rec.record_all(clips)
     assert [r.ok for r in res] == [True, True], res
     for c in clips:
         assert c.target.read_bytes().startswith(b"\x1aE\xdf\xa3")
-    starts = [b for m, p, b, *_ in _Fake.log
-              if m == "POST" and p == "/replay/recording"
-              and b.get("recording")]
-    assert starts[0] == {"recording": True, "startTime": 100.0,
-                         "endTime": 112.0, "codec": "webm",
-                         "framesPerSecond": 30, "width": 1280,
-                         "height": 720, "enforceFrameRate": True,
-                         "lossless": False, "replaySpeed": 1.0,
-                         "path": str(clips[0].target)}
+    starts = [(x[2], x[4]) for x in _Fake.log
+              if x[0] == "POST" and x[1] == "/replay/recording"
+              and x[2].get("recording")]
+    # verified live: startTime -1 (= now, no seek that drops the camera
+    # lock), no width/height (= the window), enforceFrameRate off (on made
+    # clips ~1.3x too fast)
+    assert starts[0][0] == {"recording": True, "startTime": -1.0,
+                            "endTime": 112.0, "codec": "webm",
+                            "framesPerSecond": 60, "enforceFrameRate": False,
+                            "lossless": False, "replaySpeed": 1.0,
+                            "path": str(clips[0].target)}
+    # started when the replay reached the clip, not before (and within
+    # ~0.15 s of real time: the fake's clock runs SCALE x)
+    for (b, t), c in zip(starts, clips):
+        assert c.start_s - 0.1 <= t < c.start_s + 0.15 * _Fake.SCALE
     seeks = [b["time"] for m, p, b, *_ in _Fake.log
              if m == "POST" and p == "/replay/playback" and "time" in b]
     assert seeks == [100 - recorder.PREROLL_S, 300 - recorder.PREROLL_S]
@@ -358,7 +388,7 @@ def test_record_clips(fake, tmp_path):
 
 def test_record_moves_file_the_game_put_elsewhere(fake, tmp_path):
     _Fake.reset(alt_dir=str(tmp_path / "lol"))
-    rec = Recorder(local.ReplayAPI(fake), "Jinx", "", poll=0.05)
+    rec = _rec(fake, "Jinx", "")
     target = tmp_path / "out" / "2m_kill.webm"
     (r,) = rec.record_all([Clip(120, 130, target, "Kill")])
     assert r.ok and r.path == target and target.exists()
@@ -374,13 +404,43 @@ def test_cancel_stops_the_recorder(fake, tmp_path):
         events.append(p)
         if p.phase == "recording" and p.frac > 0.2:
             cancel.set()
-    rec = Recorder(local.ReplayAPI(fake), "Jinx", "", on_progress=prog,
-                   cancel=cancel, poll=0.05)
+    rec = _rec(fake, "Jinx", "", on_progress=prog, cancel=cancel)
     res = rec.record_all([Clip(100, 160, tmp_path / "a.webm"),
                           Clip(400, 420, tmp_path / "b.webm")])
     assert res == [] and events[-1].phase == "cancelled"
     assert _Fake.log[-1][1:3] == ("/replay/recording", {"recording": False})
     assert not (tmp_path / "b.webm").exists()
+
+
+def test_hidden_window_is_brought_up_or_waited_for(fake, tmp_path,
+                                                   monkeypatch):
+    """A full-screen League in the background records nothing: bring it to
+    the front first; if that fails, wait for the user (then give up)."""
+    _Fake.reset()
+    shown = {"n": 0}
+
+    def visible():
+        shown["n"] += 1
+        return shown["n"] > 3            # the user clicks it after a while
+    events = []
+    rec = _rec(fake, "Jinx", "", front=lambda: False, visible=visible,
+               on_progress=events.append)
+    (r,) = rec.record_all([Clip(100, 105, tmp_path / "a.webm")])
+    assert r.ok and "window" in [e.phase for e in events]
+    monkeypatch.setattr(recorder, "WINDOW_WAIT_S", 0.3)
+    rec = _rec(fake, "Jinx", "", front=lambda: False, visible=lambda: False)
+    (r,) = rec.record_all([Clip(200, 205, tmp_path / "b.webm")])
+    assert not r.ok and "hidden" in r.error
+
+
+def test_recorder_that_never_starts(fake, tmp_path):
+    """The game said OK but isn't recording (window hidden after all):
+    fail the clip with the reason instead of waiting for a file."""
+    _Fake.reset(hidden=True)
+    (r,) = _rec(fake, "Jinx", "").record_all([Clip(100, 105,
+                                                   tmp_path / "a.webm")])
+    assert not r.ok and "didn't start recording" in r.error
+    assert "16x0" in r.error
 
 
 def test_open_replay_downloads_and_waits(fake, tmp_path):
@@ -436,6 +496,9 @@ def app(tmp_path_factory):
     import highlights.app as happ
     opened = []
     mp.setattr(happ, "open_path", opened.append)
+    from highlights import gamewindow
+    mp.setattr(gamewindow, "bring_to_front", lambda *a, **k: True)
+    mp.setattr(gamewindow, "visible", lambda *a, **k: True)
     mp.setattr(happ, "_simulate", functools.partial(
         happ._simulate, step=0.005, per_clip=0.05))
     from highlights.__main__ import _demo_data

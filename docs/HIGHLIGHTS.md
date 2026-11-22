@@ -22,7 +22,9 @@ python packaging/build.py --app highlights                    # release/Highligh
 
 Uses Review's API key and cache, like REPLAY ("Fetch new games" runs
 Review's `SyncJob`). Clips go to `Videos\Highlights\<date>_<champ>_vs_<opp>\
-<min>m_<type>.webm` (Settings: folder, 720p/1080p/1440p, 30/60 fps).
+<min>m_<type>.webm` (Settings: folder). The video is as big as League's
+window and League must be on screen while it records: Highlights brings the
+replay to the front for each clip and itself back when done.
 
 ## How it works
 
@@ -52,34 +54,61 @@ open yet): recording is real time.
 
 ### Recording flow (`recorder.py`)
 
-Per clip: seek to 7 s before the clip (playing, speed 1) →
-`follow_after_seek` (the camera pans to you in those seconds) → POST
-`/replay/recording` with `startTime`/`endTime` of the clip, codec `webm`,
-fps, size and `path` → poll GET until `recording` is false (or stop it
-6 s past `endTime`) → wait until the file stops growing; if it isn't at
-`path`, take the newest video the game wrote since the clip started
-(reported `path`, `Videos\League of Legends`,
-`Documents\League of Legends\Highlights`) and move it into place. **No
-seeks or camera calls while a clip records** (tests check this). Cancel
-stops the recorder; the replay is paused when all clips are done.
+Per clip: make sure League's window is on screen (`gamewindow.py`) → seek
+to 7 s before the clip (playing, speed 1) → `follow_after_seek` (the camera
+pans to you in those seconds) → let it play up to the clip's start → POST
+`/replay/recording` with `startTime: -1` (now), the clip's `endTime`,
+codec `webm`, 60 fps, `enforceFrameRate: false` and `path` → the game
+stops by itself at `endTime` → the file is at `path` (if not, the newest
+video the game wrote is moved there). **No seeks or camera calls while a
+clip records** (tests check this). If Windows won't let us bring League
+up, the progress line asks you to click it and waits 60 s. Cancel stops
+the recorder; the replay is paused when all clips are done.
 
 Riot keeps replays for the current patch only: games on another patch are
 marked "old patch" in the list and Record is disabled with the reason.
 
-## Verified on Windows
+## Verified on Windows (2026-11-22, client 16.23.840.6595)
 
-* ✅ Scoring, merging and the recording flow against a fake Replay API +
-  LCU (`tests/test_highlights.py`, 18 tests; full suite 134 green).
-* ✅ Look: same banner, tab row, panels and status line as REPLAY at 200 %
-  (`--demo --snapshot`, PrintWindow).
-* ✅ Build: `dist/Highlights/Highlights.exe --demo --snapshot out.png` runs.
-* ⏳ **`/replay/recording` live — not checked yet** (the client wasn't
-  running on 2026-11-22). Built from Riot's documented `Recording` schema.
-  To check with the client up and a replay open:
-  1. GET `/swagger/v3/openapi.json` → `Recording` fields (recording,
-     startTime, endTime, currentTime, codec, framesPerSecond, width,
-     height, lossless, enforceFrameRate, replaySpeed, path).
-  2. Is `path` a file or a folder? Where does the file land if it's left
-     out? Does `recording` flip to false by itself at `endTime`?
-  3. Record a 5 s test clip and play it.
-  4. Fix `Recorder.record` / `_collect` if any of that differs.
+Checked with the client and a real replay open (game 8053666923, 1440×900
+window, full screen):
+
+1. **Opening a replay** — ✅ `open_replay` on a game the client hadn't
+   loaded: metadata 404 → `create` → download → Watch → the Replay API
+   answers after ~28 s.
+2. **`Recording` schema** — ✅ `/swagger/v3/openapi.json` has exactly
+   recording, startTime, endTime, currentTime, codec (`webm` | `png` |
+   `pngAndDepth`), framesPerSecond, width, height, lossless,
+   enforceFrameRate, replaySpeed, path ("file path or directory").
+   GET before anything: `startTime`/`endTime` −1.
+3. **The window must be on screen** — ❗ full-screen League in the
+   background shrinks its window to 1×1: the POST is accepted, reads back
+   width 16 × height 0, `recording` stays false and no file is written
+   (also happens as soon as you click another window). Brought to the
+   front (`SetForegroundWindow` + `AttachThreadInput`), it records at the
+   window's size. `width`/`height` sent in the POST change nothing.
+   → `gamewindow.bring_to_front` before each clip, and a clip fails with
+   the reason if the recorder doesn't start.
+4. **`startTime`** — ❗ any value ≥ 0 makes the game seek there itself
+   (which drops the camera lock). `startTime: -1` = start now: no seek,
+   the lock stays. → we seek + lock ourselves, then start with −1.
+5. **Stops by itself** — ✅ at `endTime`, `recording` turns false and
+   `endTime` goes back to −1. The file is written exactly at `path`.
+6. **Speed** — ❗ `enforceFrameRate: true` gave clips that run too fast:
+   every rendered frame is stamped 1/60 s apart, but this PC renders ~45
+   fps while encoding at 1440×900 (10 s of game → 8.0 s of video at 60
+   fps, 4.5 s at 30 fps; slowing the replay to 0.7× overshot to 11.5 s).
+   `enforceFrameRate: false`: 10 s → 10.09 s of video, real time, ~45 fps.
+   → `false`, 60 fps, speed 1; no fps/resolution settings in the app.
+7. **End to end** — ✅ `Recorder` on the real replay: seek → camera →
+   record → save, a 12 s clip took 22.7 s and gave a 12.12 s, 13.6 MB VP9
+   WebM (Opus audio) with the camera centred on your champion.
+   `Videos\Highlights\_verify\app_flow.webm` is that clip.
+
+Also: the game's WebM has no seek index (Cues), so some players can't
+jump around in a clip; it plays fine start to end (browser, VLC).
+
+Tests: scoring, merging and the recording flow against a fake that
+behaves like the points above (`tests/test_highlights.py`, 20 tests; full
+suite 136 green). Look: same banner, tab row, panels and status line as
+REPLAY at 200 % (`--demo --snapshot`, PrintWindow).
