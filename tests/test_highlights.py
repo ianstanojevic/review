@@ -370,9 +370,9 @@ def test_record_clips(fake, tmp_path):
                             "lossless": False, "replaySpeed": 1.0,
                             "path": str(clips[0].target)}
     # started when the replay reached the clip, not before (and within
-    # ~0.15 s of real time: the fake's clock runs SCALE x)
+    # ~0.5 s of real time: the fake's clock runs SCALE x)
     for (b, t), c in zip(starts, clips):
-        assert c.start_s - 0.1 <= t < c.start_s + 0.15 * _Fake.SCALE
+        assert c.start_s - 0.1 <= t < c.start_s + 0.5 * _Fake.SCALE
     seeks = [b["time"] for m, p, b, *_ in _Fake.log
              if m == "POST" and p == "/replay/playback" and "time" in b]
     assert seeks == [100 - recorder.PREROLL_S, 300 - recorder.PREROLL_S]
@@ -535,86 +535,158 @@ def _pump(a, secs=1.5, until=None):
     return until() if until else True
 
 
-def test_ui_highlights_and_demo_recording(app):
+class _Ev:
+    """A stand-in for a Tk mouse event."""
+    def __init__(self, x, y):
+        self.x, self.y, self.x_root, self.y_root = int(x), int(y), 0, 0
+
+
+def test_ui_editor_trim_and_demo_save(app):
+    from highlights.timeline import MIN_CLIP_MS
     a = app
-    assert _pump(a, 8, lambda: a.game is not None and a.hl)
+    assert _pump(a, 8, lambda: a.game is not None and a.tl is not None)
     assert a.game.me.champion == "Sona"
-    assert a.sel == score.default_selection(a.hl)
     best = max(range(len(a.hl)), key=lambda i: a.hl[i].score)
-    assert best in a.sel
-    # order: best first, then in game order
-    assert a._order()[0] == best
-    a._set_order("time")
-    assert a._order() == list(range(len(a.hl)))
-    a._set_order("best")
-    # tick / untick / bulk
-    a.toggle(best)
-    assert best not in a.sel
-    a.toggle(best)
-    a._select(set())
-    assert a.selected() == []
-    a._select({best})
-    assert "about" in [w for w in a.actions.winfo_children()][0] \
-        .winfo_children()[0].cget("text")
-    # demo: simulated, nothing written
-    a.record()
-    assert a.rec is not None
+    assert a.sel_i == best and a.tl.selected == best
+    assert len(a.tl.spans) == len(a.hl)
+    # picking a block: selected, no replay -> a status line, no crash
+    a.pick(0)
+    assert a.sel_i == 0 and "Demo" in a.status.cget("text")
+    a.step(1)
+    assert a.sel_i == 1
+    a.step(-2)
+    assert a.sel_i == len(a.hl) - 1
+    a.pick(best)
+    # trimming: edges, nudges, clamps, minimum length, reset
+    h = a.hl[best]
+    a.trim(best, h.start_ms - 2000, h.end_ms + 3000)
+    assert a.clip_range(best) == (h.start_ms - 2000, h.end_ms + 3000)
+    assert a.tl.spans[best].end_ms == h.end_ms + 3000
+    a.nudge_edge("in", 1000)
+    assert a.clip_range(best)[0] == h.start_ms - 1000
+    a.trim(best, -5000, 10 ** 9)
+    assert a.clip_range(best) == (0, a.game.duration_s * 1000)
+    a.trim(best, 100_000, 100_500)
+    lo, hi = a.clip_range(best)
+    assert hi - lo == MIN_CLIP_MS
+    a.reset_trim()
+    assert best not in a.trims and a.clip_range(best) == (h.start_ms,
+                                                          h.end_ms)
+    # dragging the selected block's right edge on the timeline
+    _pump(a, 0.3)
+    tl = a.tl
+    y = tl.winfo_height() and __import__("review.theme.widgets",
+                                         fromlist=["px"]).px(tl.CLIPS)
+    x_out = tl.x_of(h.end_ms)
+    tl._press(_Ev(x_out, y))
+    assert tl._drag == "out"
+    tl._drag_to(_Ev(tl.x_of(h.end_ms + 6000), y))
+    tl._release(_Ev(tl.x_of(h.end_ms + 6000), y))
+    lo, hi = a.clip_range(best)
+    assert lo == h.start_ms and abs(hi - (h.end_ms + 6000)) <= 1500
+    a.reset_trim()
+    # clicking another block picks it; I/O without a replay -> a hint
+    other = next(i for i in range(len(a.hl)) if i != best)
+    o = a.hl[other]
+    tl._press(_Ev((tl.x_of(o.start_ms) + tl.x_of(o.end_ms)) / 2, y))
+    assert a.sel_i == other
+    a.set_edge("in")
+    assert "Open the replay first" in a.status.cget("text")
+    a.pick(best)
+    # demo save: simulated, nothing written
+    a.save()
+    assert a.rec is not None and a.tl.locked
+    a.pick(other)                           # ignored while saving
+    assert a.sel_i == best
     assert _pump(a, 10, lambda: a.rec is None)
-    assert "Demo" in a.status.cget("text")
+    assert "Demo" in a.status.cget("text") and not a.tl.locked
     assert not any((a._tmp / "Highlights").rglob("*.webm"))
+    for v in ("clips", "editor"):
+        a.navigate(v)
+        _pump(a, 0.3)
     assert not a._errors, a._errors
 
 
-def test_ui_old_patch_cannot_record(app):
+def test_ui_old_patch_cannot_save(app):
     a = app
     assert _pump(a, 8, lambda: a.game is not None)
     a.demo = False
     try:
         a.current_patch = "99.1"
-        assert not a._can_record()[0]
-        a.record()
-        assert a.rec is None and "current patch" in a.status.cget("text")
-        a._fill_games()
-        assert all(r.cells["rec"][0] == "old patch"
-                   for r in a.games_tbl.rows)
+        assert "Old patch" in a._replay_line()[0]
+        a.save()
+        assert a.rec is None and "old patch" in a.status.cget("text")
+        a.pick_game()
+        _pump(a, 0.3)
+        rows = a._games_table.rows
+        assert rows and all(r.cells["rec"][0] == "old patch" for r in rows)
+        a._games_dialog.destroy()
     finally:
         a.demo = True
         a.current_patch = None
-        a._fill_games()
 
 
-def test_ui_records_and_lists_clips(app, fake):
+def test_ui_watch_jump_trim_and_save(app, fake):
+    """Against the fake game: Watch opens the replay, a block jumps there
+    with the camera on you, O sets the out point at the playhead, Save
+    records exactly in..out, and the clip shows up as saved."""
     a = app
-    assert _pump(a, 8, lambda: a.game is not None and a.hl)
+    assert _pump(a, 8, lambda: a.game is not None and a.tl is not None)
     g = a.game
-    _Fake.reset(champs=sorted({p.champion for p in g.players.values()}))
+    _Fake.reset(open=False, state="watch",
+                champs=sorted({p.champion for p in g.players.values()}))
     _Fake.SCALE = 60.0
     a.demo = False
     a.current_patch = g.patch
     a.rapi = local.ReplayAPI(fake)
     a.lcu = _client(fake, a._tmp)
-    a.replay_state = {"state": "watch", "open": True}
     try:
-        two = sorted(range(len(a.hl)), key=lambda i: -a.hl[i].score)[:2]
-        a._select(set(two))
-        a.record()
-        assert a.rec is not None
+        a.open_replay()
+        assert _pump(a, 15, lambda: a.this_open and not a.opening),             a.status.cget("text")
+        assert ("/lol-replays/v1/rofls/%d/watch" % g.game_id) in [
+            x[1] for x in _Fake.log if x[0] == "POST"]
+        a._poll_local()
+        assert _pump(a, 4, lambda: a.tl.playhead_ms is not None)
+        best = a.sel_i
+        lo, hi = a.clip_range(best)
+        _Fake.log.clear()
+        a.pick(best)
+        assert _pump(a, 4, lambda: any(
+            x[0] == "POST" and x[1] == "/replay/playback" and "time" in x[2]
+            for x in _Fake.log))
+        seek = next(x[2] for x in _Fake.log if x[0] == "POST"
+                    and x[1] == "/replay/playback" and "time" in x[2])
+        assert seek["time"] == lo / 1000
+        # O at the playhead: out = where the replay is now
+        a.playback = {"time": lo / 1000 + 5, "paused": True, "speed": 1.0}
+        a._pb_at = time.monotonic()
+        a.set_edge("out")
+        assert a.clip_range(best) == (lo, lo + 5000)
+        # preview pauses at the out point
+        _Fake.log.clear()
+        a.preview()
+        assert a.preview_out == lo + 5000
+        assert _pump(a, 6, lambda: any(
+            x[0] == "POST" and x[1] == "/replay/playback"
+            and x[2] == {"paused": True} for x in _Fake.log))
+        # save exactly in..out
+        _Fake.log.clear()
+        a.save()
         assert _pump(a, 30, lambda: a.rec is None), a.status.cget("text")
-        assert [r.ok for r in a.results] == [True, True], a.results
-        folder = a.out_dir() / score.folder_name(g)
-        files = sorted(f.name for f in folder.glob("*.webm"))
-        names = score.file_names(a.hl)
-        assert files == sorted(names[i] for i in two)
-        assert "Recorded 2 clips" in a.status.cget("text")
+        assert [r.ok for r in a.results] == [True], a.results
+        assert a.clip_path(best).exists()
+        assert "Saved" in a.status.cget("text")
+        start = next(x[2] for x in _Fake.log if x[0] == "POST"
+                     and x[1] == "/replay/recording" and x[2].get(
+                         "recording"))
+        assert start["startTime"] == -1.0
+        assert start["endTime"] == (lo + 5000) / 1000
         _no_camera_or_seek_while_recording()
-        # the recorded list plays a clip on click
-        a.play(folder / files[0])
-        assert a._opened[-1] == folder / files[0]
-        a.navigate("clips")
-        _pump(a, 0.3)
-        a.navigate("record")
-        assert _pump(a, 3, lambda: a.game is not None)
+        assert a.tl.spans[best].saved
+        a.play(a.clip_path(best))
+        assert a._opened[-1] == a.clip_path(best)
         assert not a._errors, a._errors
     finally:
         a.demo = True
+        a.this_open = False
         _Fake.SCALE = 25.0

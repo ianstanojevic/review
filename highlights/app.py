@@ -1,16 +1,21 @@
-"""HIGHLIGHTS desktop app — DRAFT's window, your best moments as videos.
+"""HIGHLIGHTS desktop app — DRAFT's window, a small editor for your replays.
 
-Layout: banner (title · account · client status · ⚙), VIEW tabs, then:
+Works like an editing program: you watch the replay in League (borderless
+window above or beside this one), and here you get
 
-* Record — your games (left) and the open game (right): its highlights
-             with score, length and a tick box (the best ticked), "Record
-             selected" with the estimated time, progress, and the clips
-             already recorded for the game.
-* Clips  — every clip you've recorded, newest first; click to play.
+* the remote: ⟲10 · play/pause · 10⟳ · speed · Follow me (camera on you),
+* a timeline of the whole game — kills, highlight blocks (length = clip,
+  brightness = score), objectives — with a playhead that follows the
+  replay; click a block to jump there, drag its edges to trim it, or set
+  in/out at the playhead with I / O,
+* the selected clip: in, out, length, Preview and Save clip (League
+  replays just that part once and records it),
+* the clips you've saved for this game; click to play.
 
-Matches and timelines come from Review's cache, like REPLAY. Recording goes
-through League's own replay recorder (``recorder.py``). All network and
-disk work runs off the UI thread and comes back through ``post``.
+The Clips view lists every clip you've saved. Matches and timelines come
+from Review's cache, like REPLAY; recording goes through League's own
+replay recorder (``recorder.py``). All network and disk work runs off the
+UI thread and comes back through ``post``.
 """
 from __future__ import annotations
 
@@ -37,18 +42,21 @@ from review.cache import Cache
 from review.theme import anim
 from review.theme import widgets as W
 from review.theme import window
-from review.theme.tokens import (ACCENT, BAD, BORDER, DARK_BG, DIM, EDGE_HI,
-                                 F_LG_B, F_SM, F_SM_B, F_XS, F_XS_B, FG, GOOD,
+from review.theme.tokens import (BAD, BORDER, DARK_BG, DIM, EDGE_HI, F_LG_B,
+                                 F_MD_B, F_SM, F_SM_B, F_XS, F_XS_B, FG, GOOD,
                                  HOVER, PANEL, PANEL2, SP_L, SP_M, SP_S, SP_XS,
-                                 mix)
+                                 TEAL_BG, mix)
 from review.theme.widgets import px
 from review.ui.assets import IconStore
 
 from . import recorder, score
 from .recorder import Clip, ClipResult, Progress
+from .timeline import MIN_CLIP_MS, ClipTimeline, Span
 
-VIEWS = [("record", "Record"), ("clips", "Clips")]
-ORDERS = [("best", "Best first"), ("time", "In game order")]
+VIEWS = [("editor", "Editor"), ("clips", "Clips")]
+SPEEDS = [(0.5, "0.5×"), (1.0, "1×"), (2.0, "2×")]
+KEYS = ("Space play/pause · ←/→ 10 s · N/P next/previous clip · I/O in/out "
+        "at the playhead · Enter preview · S save · F follow me")
 LEGAL = ("HIGHLIGHTS isn't endorsed by Riot Games and doesn't reflect the "
          "views or opinions of Riot Games or anyone officially involved in "
          "producing or managing Riot Games properties.")
@@ -81,7 +89,8 @@ def _dur(s: float) -> str:
 
 
 class App:
-    # REPLAY's account picker, game fetch and UI-thread queue, as they are
+    # REPLAY's account picker, game fetch, UI-thread queue and "bring the
+    # camera back when it wanders off", as they are
     ask_account = _Replay.ask_account
     switch = _Replay.switch
     fetch = _Replay.fetch
@@ -89,6 +98,7 @@ class App:
     _known_players = _Replay._known_players
     post = _Replay.post
     _drain = _Replay._drain
+    _keep_on_me = _Replay._keep_on_me
 
     def __init__(self, demo: bool = False):
         import queue
@@ -116,26 +126,37 @@ class App:
         self.game: GameView | None = None
         self.match: dict | None = None
         self.hl: list[score.Highlight] = []
-        self.sel: set[int] = set()
-        self.view = "record"
+        self.names: list[str] = []
+        self.trims: dict[int, tuple[int, int]] = {}
+        self.sel_i: int | None = None
+        self._champs: set[str] = set()
+        self.view = "editor"
         self.client_ok = False
         self.replay_state: dict = {}
-        self.job = None                    # Review's SyncJob (Fetch)
-        self.rec: dict | None = None       # the recording in progress
+        self.playback: dict | None = None      # last /replay/playback
+        self.this_open = False                 # the open replay is this game
+        self.opening = False
+        self.preview_out: float | None = None  # pause the preview here (ms)
+        self.job = None                        # Review's SyncJob (Fetch)
+        self.rec: dict | None = None           # the clip being saved
         self.cancel: threading.Event | None = None
         self.results: list[ClipResult] = []
+        self.tl: ClipTimeline | None = None
         self._inbox: queue.Queue = queue.Queue()
         self._alive = True
+        self._offscreen = 0
+        self._polls = 0
         self._build()
         self.root.after(30, self._drain)
         root.geometry(window.safe_geometry(
-            root, self.prefs.get("geometry"), (1320, 900)))
-        root.minsize(px(1080), px(680))
+            root, self.prefs.get("geometry"), (1320, 620)))
+        root.minsize(px(980), px(520))
         root.protocol("WM_DELETE_WINDOW", self.close)
         root.bind("<Destroy>", lambda e: e.widget is root and setattr(
             self, "_alive", False), add="+")
         root.report_callback_exception = lambda exc, val, tb: self._log(
             "".join(traceback.format_exception(exc, val, tb)))
+        self._bind_keys()
         threading.Thread(target=self._load_static, daemon=True).start()
         if not demo:
             self._pick_player()
@@ -151,27 +172,24 @@ class App:
         self.banner.pack(fill="x")
         nav = tk.Frame(outer, bg=DARK_BG)
         nav.pack(fill="x", pady=(SP_L, SP_M))
-        self.nav = W.TabRow(nav, "VIEW", VIEWS, "record",
+        self.nav = W.TabRow(nav, "VIEW", VIEWS, "editor",
                             on_change=self.navigate)
         self.nav.pack(side="left")
-        self.fetch_btn = W.button(nav, "Fetch new games", self.fetch,
-                                  fg=DIM, font=F_SM)
-        self.fetch_btn.configure(pady=4)
-        self.fetch_btn.pack(side="right")
-        acc = W.button(nav, "Account", self.ask_account, fg=DIM, font=F_SM)
-        acc.configure(pady=4)
-        acc.pack(side="right", padx=(0, SP_S))
+        for text, cmd, pad in (("Fetch new games", self.fetch, 0),
+                               ("Account", self.ask_account, SP_S),
+                               ("Games…", self.pick_game, SP_S)):
+            b = W.button(nav, text, cmd, fg=DIM, font=F_SM)
+            b.configure(pady=4)     # like the tabs (DRAFT's row height)
+            b.pack(side="right", padx=(0, pad))
         self.content = tk.Frame(outer, bg=DARK_BG)
         self.content.pack(fill="both", expand=True)
         bottom = tk.Frame(outer, bg=DARK_BG)
         bottom.pack(fill="x", side="bottom", pady=(SP_M, 0))
-        tk.Label(bottom, text="Recording runs in real time · leave the "
-                 "replay alone while a clip records", bg=DARK_BG,
-                 fg=mix(DIM, DARK_BG, 0.35), font=F_XS).pack(side="left",
-                                                             anchor="s")
+        tk.Label(bottom, text=KEYS, bg=DARK_BG, fg=mix(DIM, DARK_BG, 0.35),
+                 font=F_XS).pack(side="left", anchor="s")
         self.status = tk.Label(bottom, text="", bg=DARK_BG, fg=DIM, font=F_SM)
         self.status.pack(side="right", anchor="s")
-        self.navigate("record")
+        self.navigate("editor")
 
     def set_status(self, text, color=DIM):
         self.status.configure(text=text, fg=color)
@@ -182,16 +200,21 @@ class App:
             bits.append("%s · %s" % (self.player["riot_id"],
                                      self.player["region"]))
         if self.demo:
-            bits.append("demo — nothing is recorded")
+            bits.append("demo — no League, nothing is recorded")
         else:
             bits.append("client " + ("connected" if self.client_ok
                                      else "not running"))
+            if self.playback:
+                bits.append("replay %s%s" % (fmt_time(self.playback.get(
+                    "time", 0)), " ❚❚" if self.playback.get("paused")
+                    else " ▶"))
         self.banner.set_context(" · ".join(bits))
 
     def navigate(self, name):
         self.view = name
         self.nav.select(name, fire=False)
         _clear(self.content)
+        self.tl = None
         getattr(self, "_view_" + name)()
 
     def out_dir(self) -> Path:
@@ -208,9 +231,7 @@ class App:
         def done():
             if ver:
                 self.current_patch = ".".join(ver.split(".")[:2])
-                if self.view == "record":
-                    self._fill_games()
-                    self._render_game()
+                self._render_remote()
         self.post(done)
 
     def _pick_player(self):
@@ -250,9 +271,7 @@ class App:
 
         def done(rows):
             self.games = rows
-            self.set_status("%d games" % len(rows))
-            if self.view == "record":
-                self._fill_games()
+            self.set_status("%d games · Games… to switch" % len(rows))
             if then:
                 then()
             elif self.game is None and rows:
@@ -260,80 +279,67 @@ class App:
         threading.Thread(target=work, daemon=True).start()
 
     # ------------------------------------------------- recordable or not
-    def _patch_of(self, version: str) -> str:
-        return ".".join(version.split(".")[:2])
-
     def old_patch(self, version: str) -> bool:
         """Riot keeps replays for the current patch only."""
         if self.demo or not self.current_patch:
             return False
-        return self._patch_of(version) != self.current_patch
+        return ".".join(version.split(".")[:2]) != self.current_patch
 
     def _clip_count(self, g: GameRow) -> int:
-        d = self.out_dir() / score.folder_for(g.created, g.champion,
-                                              g.opponent)
-        try:
-            return sum(1 for f in d.iterdir() if f.suffix == ".webm")
-        except OSError:
-            return 0
+        return len(_videos(self.out_dir() / score.folder_for(
+            g.created, g.champion, g.opponent)))
 
-    # ====================================================== RECORD view
-    def _view_record(self):
-        wrap = tk.Frame(self.content, bg=DARK_BG)
-        wrap.pack(fill="both", expand=True)
-        left = tk.Frame(wrap, bg=DARK_BG, width=px(440))
-        left.pack(side="left", fill="y")
-        left.pack_propagate(False)
-        p = W.CutPanel(left, padx=12, grow=True)
-        p.pack(fill="both", expand=True)
-        self.games_right = W.section_title(p.inner, "GAMES", EDGE_HI,
-                                           right="")
+    # ------------------------------------------------------ pick a game
+    def pick_game(self):
+        if self.rec is not None:
+            self.set_status("Saving a clip — cancel it first to switch games",
+                            EDGE_HI)
+            return
+        d = tk.Toplevel(self.root, bg=BORDER)
+        d.title("Games")
+        d.transient(self.root)
+        body = tk.Frame(d, bg=PANEL, padx=px(14), pady=px(10))
+        body.pack(padx=1, pady=1, fill="both", expand=True)
+        W.section_title(body, "GAMES", EDGE_HI, right="%d ranked · newest "
+                        "first · replays only for the current patch"
+                        % len(self.games))
         cols = [W.Col("icon", "", 0, kind="icon"),
-                W.Col("champ", "CHAMPION", 8, "w", stretch=True),
-                W.Col("vs", "VS", 7, "w"),
-                W.Col("res", "", 1),
+                W.Col("champ", "CHAMPION", 9, "w", stretch=True),
+                W.Col("vs", "VS", 9, "w"),
+                W.Col("res", "", 2),
+                W.Col("kda", "KDA", 9, "center"),
                 W.Col("date", "DATE", 7, "e"),
                 W.Col("clips", "CLIPS", 5, "center"),
-                W.Col("rec", "REPLAY", 8, "center")]
-        self.games_tbl = W.Table(p.inner, cols, icon_loader=self.icons.get,
-                                 on_click=lambda r: self.open_game(
-                                     r.data.match_id),
-                                 rows_visible=None, tooltip=self.tooltip)
-        self.games_tbl.pack(fill="both", expand=True)
-        self.right = W.ScrollArea(wrap)
-        self.right.pack(side="left", fill="both", expand=True,
-                        padx=(SP_L, 0))
-        self._fill_games()
-        self._render_game()
+                W.Col("rec", "REPLAY", 9, "center")]
 
-    def _fill_games(self):
-        if not getattr(self, "games_tbl", None) or not \
-                self.games_tbl.winfo_exists():
-            return
+        def go(r):
+            d.destroy()
+            self.open_game(r.data.match_id)
+        t = W.Table(body, cols, icon_loader=self.icons.get, on_click=go,
+                    rows_visible=12, tooltip=self.tooltip)
+        t.pack(fill="both", expand=True)
         rows = []
         for g in self.games:
             n = self._clip_count(g)
             rows.append(W.Row({
-                "champ": (g.champion, FG),
-                "vs": (g.opponent or "", DIM),
+                "champ": (g.champion, FG), "vs": (g.opponent or "", DIM),
                 "res": ("W" if g.win else "L", GOOD if g.win else BAD),
-                "date": (_date(g.created), DIM),
+                "kda": (g.kda, DIM), "date": (_date(g.created), DIM),
                 "clips": (str(n) if n else "—", GOOD if n else DIM),
                 "rec": ("old patch", mix(DIM, PANEL, 0.3))
                 if self.old_patch(g.version) else ("● ready", GOOD)},
                 icon=g.champion, data=g,
                 marked=bool(self.game and self.game.match_id == g.match_id)))
-        self.games_tbl.set_rows(rows)
-        if self.games_right is not None:
-            self.games_right.configure(text="%d ranked · newest first"
-                                       % len(rows))
+        t.set_rows(rows)
+        d.geometry("%dx%d" % (px(760), px(470)))
+        self._games_dialog = d
+        self._games_table = t
 
-    # ----------------------------------------------------- open a game
     def open_game(self, match_id: str, keep_sel=False):
         if not self.player:
             return
         if self.rec is not None:
-            self.set_status("Recording — cancel it first to switch games",
+            self.set_status("Saving a clip — cancel it first to switch games",
                             EDGE_HI)
             return
         puuid = self.player["puuid"]
@@ -353,41 +359,82 @@ class App:
         def done(g, m, hs):
             same = self.game is not None and self.game.match_id == g.match_id
             self.game, self.match, self.hl = g, m, hs
+            self.names = score.file_names(hs)
             if not (keep_sel and same):
-                self.sel = score.default_selection(hs)
+                self.trims = {}
+                self.sel_i = max(range(len(hs)), key=lambda i: hs[i].score) \
+                    if hs else None
             self.results = []
             self.replay_state = {}
-            if self.view != "record":
-                self.navigate("record")
-            else:
-                self._fill_games()
-                self._render_game()
+            self.this_open = False
+            self.preview_out = None
+            self._champs = {p.champion for p in g.players.values()}
+            self.navigate("editor")
             self._check_replay()
+            self._check_open()
         threading.Thread(target=work, daemon=True).start()
 
-    def _render_game(self):
-        if not getattr(self, "right", None) or not self.right.winfo_exists():
-            return
-        body = self.right.body
-        _clear(body)
+    # ====================================================== EDITOR view
+    def _view_editor(self):
+        body = tk.Frame(self.content, bg=DARK_BG)
+        body.pack(fill="both", expand=True)
         g = self.game
         if g is None:
             p, _ = panel(body, "GAME")
-            tk.Label(p, text="Pick a game on the left. New games: "
-                     "“Fetch new games” (uses Review's key and cache).",
-                     bg=PANEL, fg=DIM, font=F_SM).pack(anchor="w")
+            tk.Label(p, text="No game yet. “Fetch new games” brings your "
+                     "latest ranked games (uses Review's key and cache); "
+                     "“Games…” picks one.", bg=PANEL, fg=DIM,
+                     font=F_SM).pack(anchor="w")
             return
-        self._game_header(body, g)
-        self._highlights_panel(body, g)
-        self._recorded_panel(body, g)
+        self._header(body, g)
+        p, _ = panel(body, "TIMELINE", pady=(SP_M, 0), right=(
+            "click a block to jump there · drag its edges to trim · click "
+            "anywhere else to seek" if g.has_timeline else
+            "Riot has no timeline for this game"))
+        self.tl = ClipTimeline(p, self.tooltip, on_pick=self.pick,
+                               on_seek=self.seek_to, on_trim=self.trim)
+        self.tl.pack(fill="x")
+        self.tl.locked = self.rec is not None
+        self.tl.set(g.duration_s * 1000, g.moments, self._spans(),
+                    self.sel_i)
+        if self.playback is not None and self.this_open:
+            self.tl.set_playhead(self.playback.get("time", 0) * 1000)
+        row = tk.Frame(body, bg=DARK_BG)
+        row.pack(fill="both", expand=True, pady=(SP_M, 0))
+        row.grid_columnconfigure(0, weight=3, uniform="e")
+        row.grid_columnconfigure(1, weight=2, uniform="e")
+        row.grid_rowconfigure(0, weight=1)
+        lp = W.CutPanel(row, padx=14, grow=True)
+        lp.grid(row=0, column=0, sticky="nsew", padx=(0, SP_M))
+        rp = W.CutPanel(row, padx=14, grow=True)
+        rp.grid(row=0, column=1, sticky="nsew")
+        self.clip_box, self.saved_box = lp.inner, rp.inner
+        self._render_clip()
+        self._render_saved()
 
-    def _game_header(self, body, g: GameView):
-        panel_inner, _ = panel(body, "GAME", right="%s · patch %s · %s" % (
+    def _spans(self) -> list[Span]:
+        out = []
+        for i, h in enumerate(self.hl):
+            a, b = self.clip_range(i)
+            out.append(Span(a, b, h.score, h.title,
+                            saved=self.clip_path(i).exists()))
+        return out
+
+    def clip_range(self, i: int) -> tuple[int, int]:
+        h = self.hl[i]
+        return self.trims.get(i, (h.start_ms, h.end_ms))
+
+    def clip_path(self, i: int) -> Path:
+        return self.out_dir() / score.folder_name(self.game) / self.names[i]
+
+    # header: the game + the replay remote
+    def _header(self, body, g: GameView):
+        p, _ = panel(body, "GAME", right="%s · patch %s · %s" % (
             QUEUE_SHORT.get(g.queue, g.queue), g.patch, _date(g.created_ms)))
-        top = tk.Frame(panel_inner, bg=PANEL)
+        top = tk.Frame(p, bg=PANEL)
         top.pack(fill="x")
-        ic = self.icons.get(g.me.champion, px(44),
-                            lambda: self._render_game())
+        ic = self.icons.get(g.me.champion, px(40),
+                            lambda: self.navigate(self.view))
         if ic is not None:
             tk.Label(top, image=ic, bg=PANEL).pack(side="left",
                                                    padx=(0, SP_L))
@@ -397,460 +444,209 @@ class App:
         vs = static.champion_name(g.opponent.champion) if g.opponent else "?"
         tk.Label(t, text="%s  vs  %s" % (name, vs), bg=PANEL, fg=FG,
                  font=F_LG_B).pack(anchor="w")
-        sub = "%s · %s · %s · %d CS · %s" % (
+        tk.Label(t, text="%s · %s · %s · %s · %d highlights" % (
             "Victory" if g.win else "Defeat",
-            ROLE_SHORT.get(g.me.role or "", "?"), g.kda_text, g.cs,
-            fmt_time(g.duration_s))
-        tk.Label(t, text=sub, bg=PANEL, fg=GOOD if g.win else BAD,
-                 font=F_SM).pack(anchor="w")
-        self.state_box = tk.Frame(top, bg=PANEL)
-        self.state_box.pack(side="right", anchor="n")
-        self._render_state()
+            ROLE_SHORT.get(g.me.role or "", "?"), g.kda_text,
+            fmt_time(g.duration_s), len(self.hl)), bg=PANEL,
+            fg=GOOD if g.win else BAD, font=F_SM).pack(anchor="w")
+        self.remote = tk.Frame(top, bg=PANEL)
+        self.remote.pack(side="right")
+        self._render_remote()
 
-    def _can_record(self) -> tuple[bool, str, str]:
-        """(ok, text, colour) for the open game."""
+    def _replay_line(self) -> tuple[str, str, str | None]:
+        """(text, colour, button) for the open game's replay."""
         g = self.game
-        if g is None:
-            return False, "", DIM
         if self.demo:
-            return True, "Demo: recording is simulated", EDGE_HI
+            return "Demo: no League here — jumps and saving are simulated", \
+                EDGE_HI, None
         if self.old_patch(g.version):
-            return False, ("Can't record: this game is on patch %s and "
-                           "Riot only keeps replays for the current patch "
-                           "(%s)" % (g.patch, self.current_patch)), BAD
+            return ("Old patch (%s): Riot only keeps replays for the current "
+                    "patch" % g.patch), BAD, None
+        if self.opening:
+            return self.replay_state.get("msg", "Opening the replay…"), \
+                EDGE_HI, None
+        if self.this_open:
+            return "Replay open", GOOD, None
         st = self.replay_state.get("state")
         if st in recorder.CANT_RECORD:
-            return False, "Can't record: %s" % self.replay_state.get(
-                "text", st), BAD
+            return "Can't play: %s" % self.replay_state.get("text", st), \
+                BAD, None
         if st == "offline":
-            return True, "Start the League client to record", EDGE_HI
-        if st == "watch":
-            return True, "Replay ready to record", GOOD
-        return True, self.replay_state.get("text", "Checking replay…"), DIM
+            return "Start the League client to watch", EDGE_HI, None
+        if self.playback is not None:
+            return "Another game's replay is open", EDGE_HI, "open"
+        if st in ("watch", "download", "retryDownload"):
+            return "", DIM, "open"
+        return self.replay_state.get("text", "Checking replay…"), DIM, "open"
 
-    def _render_state(self):
-        box = getattr(self, "state_box", None)
-        if box is None or not box.winfo_exists():
+    def _render_remote(self):
+        box = getattr(self, "remote", None)
+        if box is None or not box.winfo_exists() or self.game is None:
             return
         _clear(box)
-        ok, text, col = self._can_record()
-        tk.Label(box, text=text, bg=PANEL, fg=col, font=F_SM,
-                 wraplength=px(330), justify="right").pack(anchor="e")
+        text, col, btn = self._replay_line()
+        line = tk.Frame(box, bg=PANEL)
+        line.pack(anchor="e")
+        if text:
+            tk.Label(line, text=text, bg=PANEL, fg=col, font=F_SM).pack(
+                side="left", padx=(0, SP_M))
+        if btn == "open" and self.rec is None:
+            W.button(line, "▶  Watch replay", self.open_replay,
+                     gold=True).pack(side="left")
+        ctl = tk.Frame(box, bg=PANEL)
+        ctl.pack(anchor="e", pady=(SP_S, 0))
+        live = self.this_open and self.rec is None
+        off = mix(DIM, PANEL, 0.3)
+        for text, cmd, tip in (("⟲ 10", lambda: self.nudge(-10),
+                                "Back 10 s (←)"),
+                               ("▶" if (self.playback or {}).get("paused")
+                                else "❚❚", self.toggle_pause,
+                                "Play / pause (Space)"),
+                               ("10 ⟳", lambda: self.nudge(10),
+                                "Forward 10 s (→)")):
+            b = W.button(ctl, text, cmd, fg=FG if live else off, font=F_SM)
+            b.pack(side="left", padx=(0, px(3)))
+            self.tooltip.bind(b, tip)
+        on = self._follow_on()
+        b = W.button(ctl, "◎ Follow me", self.follow_me,
+                     fg=GOOD if on else (FG if live else off),
+                     bg=TEAL_BG if on else PANEL2, font=F_SM)
+        b.pack(side="left", padx=(0, px(3)))
+        self.tooltip.bind(b, "On: the camera stays on you after every jump "
+                          "and comes back if it wanders off (F)")
+        sp = W.TabRow(ctl, None, SPEEDS, float(self.prefs.get("speed", 1.0)),
+                      on_change=self.set_speed, style="teal", bg=PANEL,
+                      small=True)
+        sp.pack(side="left", padx=(SP_M, 0))
 
-    def _check_replay(self):
+    def _remote_key(self):
+        pb = self.playback
+        return (pb is not None, bool(pb and pb.get("paused")),
+                self._follow_on(), self.this_open, self.opening,
+                self.client_ok)
+
+    def _follow_on(self) -> bool:
+        return bool(self.prefs.get("follow", True))
+
+    def _me(self):
         g = self.game
-        if g is None or self.demo:
-            return
-        gid, match = g.game_id, self.match
-        champs = {p.champion for p in g.players.values()}
+        return (g.me.champion, g.me.riot_id.split("#")[0]) if g else None
 
-        def work():
-            try:
-                md = self.lcu.metadata(gid)
-                if not md:
-                    try:
-                        self.lcu.create_metadata(gid, match)
-                        md = self.lcu.metadata(gid)
-                    except local.LocalError:
-                        pass
-                st = md.get("state")
-                res = {"state": st, "text": local.REPLAY_STATE.get(
-                    st, st or "Unknown")}
-                if st == "downloading" and md.get("downloadProgress"):
-                    res["text"] = "Downloading… %d%%" % md["downloadProgress"]
-                res["open"] = recorder._replay_is(self.rapi, champs)
-            except local.NotRunning:
-                res = {"state": "offline", "text": ""}
-            except local.LocalError as e:
-                res = {"state": "clienterror", "text": "Client: %s" % e}
-            self.post(done, res)
-
-        def done(res):
-            if self.game is None or self.game.game_id != gid:
-                return
-            self.replay_state = res
-            self._render_state()
-            self._render_actions()
-            if res.get("state") in ("downloading", "checking", "found"):
-                self.root.after(1500, self._check_replay)
-        threading.Thread(target=work, daemon=True).start()
-
-    def _poll_local(self):
-        """Every 2 s: is the client up (banner + replay state)."""
-        def work():
-            ok = self.lcu.running()
-            self.post(done, ok)
-
-        def done(ok):
-            was = self.client_ok
-            self.client_ok = ok
-            self._banner()
-            if ok != was and self.game is not None and self.rec is None:
-                self._check_replay()
-            if self._alive:
-                self.root.after(2000, self._poll_local)
-        threading.Thread(target=work, daemon=True).start()
-
-    # ------------------------------------------------------ highlights
-    def _order(self) -> list[int]:
-        idx = list(range(len(self.hl)))
-        if self.prefs.get("order", "best") == "best":
-            idx.sort(key=lambda i: (-self.hl[i].score, self.hl[i].start_ms))
-        return idx
-
-    def _highlights_panel(self, body, g: GameView):
-        p, self.hl_right = panel(body, "HIGHLIGHTS", pady=(SP_M, 0),
-                                 right="")
-        if not g.has_timeline:
-            tk.Label(p, text="Riot has no timeline for this game, so there "
-                     "are no moments to find.", bg=PANEL, fg=DIM,
-                     font=F_SM).pack(anchor="w")
-            self.hl_rows = None
-            return
-        if not self.hl:
-            tk.Label(p, text="No kills, assists or objectives of yours in "
-                     "this game.", bg=PANEL, fg=DIM, font=F_SM).pack(
-                anchor="w")
-            self.hl_rows = None
-            return
-        bar = tk.Frame(p, bg=PANEL)
-        bar.pack(fill="x", pady=(0, SP_S))
-        W.TabRow(bar, "ORDER", ORDERS, self.prefs.get("order", "best"),
-                 on_change=self._set_order, style="teal", bg=PANEL,
-                 small=True).pack(side="left")
-        for text, fn in (("None", lambda: self._select(set())),
-                         ("All", lambda: self._select(set(range(len(
-                             self.hl))))),
-                         ("Best", lambda: self._select(
-                             score.default_selection(self.hl)))):
-            b = W.button(bar, text, fn, fg=DIM, font=F_SM)
-            b.configure(pady=3)
-            b.pack(side="right", padx=(px(3), 0))
-        tk.Label(bar, text="TICK", bg=PANEL, fg=DIM, font=F_XS_B).pack(
-            side="right", padx=(0, SP_S))
-        self.hl_rows = tk.Frame(p, bg=PANEL)
-        self.hl_rows.pack(fill="x")
-        self._render_rows()
-        self.actions = tk.Frame(p, bg=PANEL)
-        self.actions.pack(fill="x", pady=(SP_M, 0))
-        self._render_actions()
-
-    def _set_order(self, v):
-        self.prefs.set("order", v)
-        self._render_rows()
-
-    def _select(self, s: set[int]):
-        if self.rec is not None:
-            return
-        self.sel = set(s)
-        self._render_rows()
-        self._render_actions()
-
-    def toggle(self, i: int):
-        if self.rec is not None:
-            return
-        self.sel ^= {i}
-        self._render_rows()
-        self._render_actions()
-
-    def _render_rows(self):
-        box = getattr(self, "hl_rows", None)
+    # the selected clip
+    def _render_clip(self):
+        box = getattr(self, "clip_box", None)
         if box is None or not box.winfo_exists():
             return
         _clear(box)
-        top = max((h.score for h in self.hl), default=1)
-        scale = max(top, 60)
-        hdr = tk.Frame(box, bg=PANEL)
-        hdr.pack(fill="x", pady=(0, SP_XS))
-        for text, w, side in (("", 3, "left"), ("TIME", 6, "left"),
-                              ("SCORE", 11, "left"), ("MOMENT", 0, "left"),
-                              ("LENGTH", 7, "right")):
-            lb = tk.Label(hdr, text=text, bg=PANEL, fg=DIM, font=F_XS_B,
-                          anchor="w" if side == "left" else "e")
-            if w:
-                lb.configure(width=w)
-            lb.pack(side=side)
-        recording = self.rec is not None
-        for i in self._order():
-            h = self.hl[i]
-            on = i in self.sel
-            bg = HOVER if on else PANEL
-            r = tk.Frame(box, bg=bg, cursor="" if recording else "hand2")
-            r.pack(fill="x", pady=1)
-            tk.Frame(r, bg=EDGE_HI if on else bg, width=px(3)).pack(
-                side="left", fill="y")
-            tk.Label(r, text="☑" if on else "☐", bg=bg, fg=GOOD if on
-                     else DIM, font=F_SM_B, width=2).pack(side="left",
-                                                          padx=(px(4), 0))
-            tk.Label(r, text=fmt_time(h.t_ms / 1000), bg=bg, fg=FG,
-                     font=F_SM, width=6, anchor="w").pack(side="left")
-            sc = tk.Frame(r, bg=bg)
-            sc.pack(side="left", padx=(0, SP_M))
-            cv = tk.Canvas(sc, bg=bg, highlightthickness=0, width=px(52),
-                           height=px(8))
-            cv.pack(side="left", pady=px(6))
-            f = min(h.score / scale, 1.0)
-            cv.create_rectangle(0, 0, px(52), px(8), fill=PANEL2, width=0)
-            cv.create_rectangle(0, 0, px(52) * f, px(8), width=0,
-                                fill=ACCENT if h.score >= 30 else mix(
-                                    ACCENT, PANEL, 0.4))
-            tk.Label(sc, text=str(h.score), bg=bg, fg=EDGE_HI if
-                     h.score >= 30 else DIM, font=F_XS_B, width=3,
-                     anchor="e").pack(side="left")
-            tk.Label(r, text=_dur(h.length_s), bg=bg, fg=DIM, font=F_SM,
-                     width=7, anchor="e").pack(side="right",
-                                               padx=(0, px(6)))
-            txt = tk.Frame(r, bg=bg)
-            txt.pack(side="left", fill="x", expand=True)
-            tk.Label(txt, text=h.title, bg=bg, fg=FG if on else
-                     mix(FG, DIM, 0.5), font=F_SM_B if on else F_SM,
-                     anchor="w").pack(anchor="w")
-            if len(h.beats) > 1 or h.beats[0].label != h.title:
-                tk.Label(txt, text=h.details, bg=bg, fg=DIM, font=F_XS,
-                         anchor="w", justify="left",
-                         wraplength=px(560)).pack(anchor="w")
-            self.tooltip.bind(r, "%s – %s in the replay" % (
-                fmt_time(h.start_ms / 1000), fmt_time(h.end_ms / 1000)))
-            for w in (r, *r.winfo_children(), *txt.winfo_children(),
-                      *sc.winfo_children()):
-                w.bind("<Button-1>", lambda e, i=i: self.toggle(i))
-        if self.hl_right is not None:
-            self.hl_right.configure(text="%d found · %d ticked" % (
-                len(self.hl), len(self.sel)))
-
-    def selected(self) -> list[int]:
-        """Ticked clips in game order (the order they're recorded)."""
-        return sorted(self.sel, key=lambda i: self.hl[i].start_ms)
-
-    def estimate(self) -> int:
-        open_ = self.replay_state.get("open", False)
-        return score.estimate_s([self.hl[i] for i in self.selected()],
-                                replay_open=open_)
-
-    def _render_actions(self):
-        box = getattr(self, "actions", None)
-        if box is None or not box.winfo_exists():
+        self.rec_lbl = self.rec_bar = None
+        i = self.sel_i
+        if i is None or not self.hl:
+            W.section_title(box, "CLIP", EDGE_HI)
+            tk.Label(box, text="No kills, assists or objectives of yours "
+                     "in this game." if self.game and self.game.has_timeline
+                     else "Pick a game (Games…).", bg=PANEL, fg=DIM,
+                     font=F_SM, wraplength=px(520),
+                     justify="left").pack(anchor="w")
             return
-        _clear(box)
-        self.rec_bar = self.rec_lbl = None
-        if self.rec is not None:
-            line = tk.Frame(box, bg=PANEL)
-            line.pack(fill="x")
-            self.rec_lbl = tk.Label(line, text="", bg=PANEL, fg=FG,
-                                    font=F_SM, anchor="w")
+        h = self.hl[i]
+        a, b = self.clip_range(i)
+        W.section_title(box, "CLIP %d / %d  ·  %s" % (
+            i + 1, len(self.hl), fmt_time(h.t_ms / 1000)), EDGE_HI,
+            right="score %d" % h.score)
+        tk.Label(box, text=h.title, bg=PANEL, fg=FG, font=F_MD_B,
+                 anchor="w").pack(anchor="w")
+        if len(h.beats) > 1 or h.beats[0].label != h.title:
+            tk.Label(box, text=h.details, bg=PANEL, fg=DIM, font=F_XS,
+                     wraplength=px(520), justify="left").pack(anchor="w")
+        # in / out
+        trim = tk.Frame(box, bg=PANEL)
+        trim.pack(anchor="w", pady=(SP_M, 0))
+        busy = self.rec is not None
+        small = mix(DIM, PANEL, 0.4) if busy else DIM
+        for label, which, ms in (("IN", "in", a), ("OUT", "out", b)):
+            tk.Label(trim, text=label, bg=PANEL, fg=DIM, font=F_XS_B).pack(
+                side="left", padx=(0, SP_XS))
+            for txt, d in (("−1", -1000), (None, 0), ("+1", 1000)):
+                if txt is None:
+                    tk.Label(trim, text=fmt_time(ms / 1000), bg=PANEL2,
+                             fg=FG, font=F_SM_B, padx=8, pady=2,
+                             width=5).pack(side="left")
+                    continue
+                bb = W.button(trim, txt, lambda w=which, d=d:
+                              self.nudge_edge(w, d), fg=small, font=F_XS)
+                bb.configure(padx=6, pady=2)
+                bb.pack(side="left")
+                self.tooltip.bind(bb, "%s %s 1 s (%s sets it at the "
+                                  "playhead)" % (label.title(), "earlier" if
+                                                 d < 0 else "later",
+                                                 label[0]))
+            tk.Frame(trim, bg=PANEL, width=px(14)).pack(side="left")
+        tk.Label(trim, text="LENGTH", bg=PANEL, fg=DIM, font=F_XS_B).pack(
+            side="left", padx=(0, SP_XS))
+        tk.Label(trim, text=_dur((b - a) / 1000), bg=PANEL, fg=FG,
+                 font=F_SM_B).pack(side="left")
+        if i in self.trims and not busy:
+            r = W.button(trim, "Reset", self.reset_trim, fg=DIM, font=F_XS)
+            r.configure(padx=6, pady=2)
+            r.pack(side="left", padx=(SP_M, 0))
+        # actions
+        acts = tk.Frame(box, bg=PANEL)
+        acts.pack(fill="x", pady=(SP_M, 0))
+        if busy:
+            self.rec_lbl = tk.Label(acts, text="", bg=PANEL, fg=FG, font=F_SM,
+                                    anchor="w")
             self.rec_lbl.pack(side="left", fill="x", expand=True)
-            W.button(line, "Cancel", self.cancel_recording, fg=BAD,
+            W.button(acts, "Cancel", self.cancel_saving, fg=BAD,
                      font=F_SM).pack(side="right")
             self.rec_bar = W.ProgressBar(box, height=6)
             self.rec_bar.pack(fill="x", pady=(SP_S, 0))
             self.rec_bar.start()
             self._update_progress()
             return
-        sel = self.selected()
-        line = tk.Frame(box, bg=PANEL)
-        line.pack(fill="x")
-        ok, _, _ = self._can_record()
-        video = sum(self.hl[i].length_s for i in sel)
-        if sel:
-            est = "%d clip%s · %s of video · about %s to record (real time)" \
-                % (len(sel), "" if len(sel) == 1 else "s", _dur(video),
-                   _dur(self.estimate()))
-        else:
-            est = "Tick the moments you want as videos"
-        tk.Label(line, text=est, bg=PANEL, fg=FG if sel else DIM,
-                 font=F_SM).pack(side="left")
-        if ok and sel:
-            W.button(line, "●  Record selected", self.record,
-                     gold=True).pack(side="right")
-        else:
-            tk.Label(line, text="●  Record selected", bg=PANEL2,
-                     fg=mix(DIM, PANEL, 0.4), font=F_SM_B, padx=14,
-                     pady=6).pack(side="right")
-        tk.Label(box, text="League comes to the front while it records "
-                 "(video size = its window) · saved to %s" % (
-                     self.out_dir() / score.folder_name(self.game)),
+        for text, cmd, tip in (("◀", lambda: self.step(-1),
+                                "Previous clip (P)"),
+                               ("▶", lambda: self.step(1), "Next clip (N)")):
+            bb = W.button(acts, text, cmd, fg=DIM, font=F_SM)
+            bb.pack(side="left", padx=(0, px(3)))
+            self.tooltip.bind(bb, tip)
+        bb = W.button(acts, "▷  Preview", self.preview, font=F_SM)
+        bb.pack(side="left", padx=(SP_M, 0))
+        self.tooltip.bind(bb, "Plays the clip in the replay, from in to "
+                          "out, at normal speed (Enter)")
+        saved = self.clip_path(i).exists()
+        if saved:
+            tk.Label(acts, text="✓ saved", bg=PANEL, fg=GOOD,
+                     font=F_SM_B).pack(side="right", padx=(SP_M, 0))
+        W.button(acts, "●  Save clip" if not saved else "●  Save again",
+                 self.save, gold=not saved, font=F_SM).pack(side="right")
+        tk.Label(box, text="League plays the clip once and records it: "
+                 "about %s." % _dur((b - a) / 1000 + score.SETUP_S),
                  bg=PANEL, fg=DIM, font=F_XS).pack(anchor="e",
                                                    pady=(SP_XS, 0))
 
-    # ------------------------------------------------------- recording
-    def record(self):
-        g = self.game
-        if g is None or self.rec is not None:
-            return
-        idx = self.selected()
-        if not idx:
-            self.set_status("Tick at least one moment", EDGE_HI)
-            return
-        ok, why, _ = self._can_record()
-        if not ok:
-            self.set_status(why, BAD)
-            return
-        names = score.file_names(self.hl)
-        folder = self.out_dir() / score.folder_name(g)
-        clips = [Clip(self.hl[i].start_ms / 1000, self.hl[i].end_ms / 1000,
-                      folder / names[i], self.hl[i].title) for i in idx]
-        est = self.estimate()
-        self.cancel = cancel = threading.Event()
-        self.rec = {"clips": clips, "p": Progress("loading", 0, len(clips)),
-                    "t0": time.monotonic(), "est": est, "msg": ""}
-        self.results = []
-        self.set_status("Recording %d clips · about %s" % (len(clips),
-                                                          _dur(est)))
-        self._render_rows()
-        self._render_actions()
-        champs = {p.champion for p in g.players.values()}
-        me = (g.me.champion, g.me.riot_id.split("#")[0])
-        prog = lambda p: self.post(self._on_progress, p)    # noqa: E731
-
-        def work():
-            err = None
-            res: list[ClipResult] = []
-            try:
-                if self.demo:
-                    res = _simulate(clips, prog, cancel)
-                else:
-                    recorder.open_replay(
-                        self.lcu, self.rapi, g.game_id, self.match, champs,
-                        cancel, status=lambda m: self.post(self._on_load, m))
-                    rec = recorder.Recorder(self.rapi, *me,
-                                            on_progress=prog, cancel=cancel)
-                    res = rec.record_all(clips)
-            except recorder.Cancelled:
-                err = "Cancelled"
-            except recorder.NotRecordable as e:
-                err = ("Can't record this game: %s. Riot keeps replays only "
-                       "for the current patch." % e)
-            except local.NotRunning:
-                err = "Start the League client first, then press Record again"
-            except (local.LocalError, TimeoutError, OSError) as e:
-                err = str(e)
-            except Exception as e:                  # never leave it hanging
-                self._log(traceback.format_exc())
-                err = "%s: %s" % (e.__class__.__name__, e)
-            self.post(self._finished, res, err, cancel.is_set())
-        threading.Thread(target=work, daemon=True).start()
-
-    def cancel_recording(self):
-        if self.cancel is not None:
-            self.cancel.set()
-            self.set_status("Cancelling…", EDGE_HI)
-
-    def _on_load(self, msg):
-        if self.rec is not None:
-            self.rec["msg"] = msg
-            self._update_progress()
-
-    def _on_progress(self, p: Progress):
-        if self.rec is None:
-            return
-        self.rec["p"] = p
-        if p.phase == "error":
-            self.rec["msg"] = p.message
-        self._update_progress()
-
-    def _remaining(self) -> int:
-        r = self.rec
-        p: Progress = r["p"]
-        clips = r["clips"]
-        if p.phase == "loading":
-            return r["est"]
-        left = sum(c.end_s - c.start_s for c in clips[p.index + 1:])
-        if p.index < len(clips):
-            c = clips[p.index]
-            left += (1 - p.frac) * (c.end_s - c.start_s)
-        return int(left + score.SETUP_S * max(len(clips) - p.index -
-                                              (1 if p.frac else 0), 0))
-
-    def _update_progress(self):
-        r = self.rec
-        lbl, bar = getattr(self, "rec_lbl", None), getattr(self, "rec_bar",
-                                                            None)
-        if r is None or lbl is None or not lbl.winfo_exists():
-            return
-        p: Progress = r["p"]
-        n = len(r["clips"])
-        if p.phase == "loading":
-            text = r["msg"] or "Opening the replay…"
-            frac = 0.0
-        else:
-            c = r["clips"][min(p.index, n - 1)]
-            verb = {"seeking": "Jumping to", "camera": "Camera on you for",
-                    "window": "Click League's replay window — waiting to "
-                    "record",
-                    "recording": "● Recording", "saving": "Saving",
-                    "error": "Failed:", "done": "Done",
-                    "cancelled": "Cancelled"}.get(p.phase, p.phase)
-            text = "Clip %d/%d · %s %s" % (min(p.index + 1, n), n, verb,
-                                          c.title)
-            frac = (p.index + p.frac) / n
-        text += "  ·  about %s left" % _dur(self._remaining())
-        lbl.configure(text=text, fg=BAD if p.phase == "error" else FG)
-        if bar is not None:
-            bar.set(frac)
-
-    def _finished(self, results: list[ClipResult], err: str | None,
-                  cancelled: bool):
-        if not self.demo:                # League was in front while recording
-            try:
-                self.root.deiconify()
-                self.root.lift()
-                self.root.focus_force()
-            except tk.TclError:
-                pass
-        self.rec = None
-        self.cancel = None
-        self.results = results
-        ok = [r for r in results if r.ok]
-        bad = [r for r in results if not r.ok]
-        if self.demo and not err:
-            self.set_status("Demo: %d clips would have been recorded — "
-                            "nothing was saved" % len(ok), EDGE_HI)
-        elif err and not ok:
-            self.set_status(err, EDGE_HI if cancelled else BAD)
-        elif bad:
-            self.set_status("Recorded %d of %d clips · %s" % (
-                len(ok), len(results), bad[0].error), BAD)
-        else:
-            self.set_status("Recorded %d clip%s%s" % (
-                len(ok), "" if len(ok) == 1 else "s",
-                " (then cancelled)" if cancelled else ""), GOOD)
-        if self.view == "record":
-            self._render_rows()
-            self._render_actions()
-            self._refresh_recorded()
-            self._fill_games()
-
-    # ------------------------------------------------- recorded clips
-    def _recorded_panel(self, body, g: GameView):
-        p, self.done_right = panel(body, "RECORDED", GOOD, pady=(SP_M, 0),
-                                   right="")
-        self.done_box = p
-        self._refresh_recorded()
-
-    def _refresh_recorded(self):
-        box = getattr(self, "done_box", None)
+    # saved clips of this game
+    def _render_saved(self):
+        box = getattr(self, "saved_box", None)
         if box is None or not box.winfo_exists() or self.game is None:
             return
-        for w in box.winfo_children()[2:]:      # keep the section title
-            w.destroy()
+        _clear(box)
         folder = self.out_dir() / score.folder_name(self.game)
         files = _videos(folder)
-        if self.done_right is not None:
-            self.done_right.configure(text="%d clip%s · click to play" % (
-                len(files), "" if len(files) == 1 else "s") if files
-                else "")
+        W.section_title(box, "SAVED CLIPS", GOOD, right="%d · click to play"
+                        % len(files) if files else "")
         if not files:
-            tk.Label(box, text="Nothing recorded for this game yet. Clips "
-                     "go to %s" % folder, bg=PANEL, fg=DIM, font=F_SM,
-                     wraplength=px(700), justify="left").pack(anchor="w")
-        for f in files:
+            tk.Label(box, text="Clips you save show up here.", bg=PANEL,
+                     fg=DIM, font=F_SM).pack(anchor="w")
+        for f in files[:8]:
             self._clip_row(box, f)
-        acts = tk.Frame(box, bg=PANEL)
-        acts.pack(fill="x", pady=(SP_M, 0))
-        W.button(acts, "Open folder", lambda: self.open_folder(folder),
-                 font=F_SM).pack(side="right")
+        if len(files) > 8:
+            tk.Label(box, text="+ %d more in the Clips view" % (
+                len(files) - 8), bg=PANEL, fg=DIM, font=F_XS).pack(
+                anchor="w")
+        W.button(box, "Open folder", lambda: self.open_folder(folder),
+                 font=F_SM, fg=DIM).pack(anchor="e", pady=(SP_M, 0))
 
-    def _clip_row(self, box, f: Path, show_game=False):
+    def _clip_row(self, box, f: Path):
         try:
             st = f.stat()
         except OSError:
@@ -861,24 +657,17 @@ class App:
             side="left", padx=(px(4), 0))
         tk.Label(r, text=f.name, bg=PANEL, fg=FG, font=F_SM,
                  anchor="w").pack(side="left")
-        if show_game:
-            tk.Label(r, text="  " + f.parent.name.replace("_", " "),
-                     bg=PANEL, fg=DIM, font=F_XS).pack(side="left")
         tk.Label(r, text=datetime.fromtimestamp(st.st_mtime).strftime(
-            "%d %b %H:%M"), bg=PANEL, fg=DIM, font=F_XS, width=13,
+            "%d %b %H:%M"), bg=PANEL, fg=DIM, font=F_XS, width=12,
             anchor="e").pack(side="right", padx=(0, px(6)))
         tk.Label(r, text=_mb(st.st_size), bg=PANEL, fg=DIM, font=F_XS,
-                 width=9, anchor="e").pack(side="right")
+                 width=8, anchor="e").pack(side="right")
 
-        def enter(e, r=r):
+        def paint(c, r=r):
             for w in (r, *r.winfo_children()):
-                w.configure(bg=HOVER)
-
-        def leave(e, r=r):
-            for w in (r, *r.winfo_children()):
-                w.configure(bg=PANEL)
-        r.bind("<Enter>", enter)
-        r.bind("<Leave>", leave)
+                w.configure(bg=c)
+        r.bind("<Enter>", lambda e: paint(HOVER))
+        r.bind("<Leave>", lambda e: paint(PANEL))
         for w in (r, *r.winfo_children()):
             w.bind("<Button-1>", lambda e, f=f: self.play(f))
 
@@ -895,6 +684,448 @@ class App:
             open_path(folder)
         except OSError as e:
             self.set_status("Can't open %s: %s" % (folder, e), BAD)
+
+    # ------------------------------------------------- editing a clip
+    def pick(self, i: int, jump: bool = True):
+        if self.rec is not None or not (0 <= i < len(self.hl)):
+            return
+        self.sel_i = i
+        if self.tl:
+            self.tl.select(i)
+        self._render_clip()
+        if jump:
+            self.jump(self.clip_range(i)[0])
+
+    def step(self, d: int):
+        if not self.hl:
+            return
+        i = 0 if self.sel_i is None else (self.sel_i + d) % len(self.hl)
+        self.pick(i)
+
+    def trim(self, i: int, a: int, b: int):
+        if self.rec is not None or not self.game:
+            return
+        end = self.game.duration_s * 1000
+        a = int(min(max(a, 0), end - MIN_CLIP_MS))
+        b = int(min(max(b, a + MIN_CLIP_MS), end))
+        h = self.hl[i]
+        if (a, b) == (h.start_ms, h.end_ms):
+            self.trims.pop(i, None)
+        else:
+            self.trims[i] = (a, b)
+        self.sel_i = i
+        if self.tl:
+            self.tl.selected = i
+            self.tl.update_span(i, self._spans()[i])
+        self._render_clip()
+        self.set_status("Clip %s – %s (%s)" % (fmt_time(a / 1000), fmt_time(
+            b / 1000), _dur((b - a) / 1000)))
+
+    def nudge_edge(self, which: str, d_ms: int):
+        if self.sel_i is None:
+            return
+        a, b = self.clip_range(self.sel_i)
+        if which == "in":
+            a += d_ms
+        else:
+            b += d_ms
+        self.trim(self.sel_i, a, b)
+
+    def set_edge(self, which: str):
+        """I / O: put the clip's in or out where the replay is now."""
+        if self.sel_i is None:
+            return
+        t = self._now_ms()
+        if t is None:
+            self.set_status("Open the replay first: in/out go where it is "
+                            "playing", EDGE_HI)
+            return
+        a, b = self.clip_range(self.sel_i)
+        t = int(t)
+        if which == "in":
+            a, b = t, max(b, t + MIN_CLIP_MS)
+        else:
+            a, b = min(a, t - MIN_CLIP_MS), t
+        self.trim(self.sel_i, a, b)
+
+    def reset_trim(self):
+        if self.sel_i is not None and self.rec is None:
+            h = self.hl[self.sel_i]
+            self.trim(self.sel_i, h.start_ms, h.end_ms)
+
+    # ---------------------------------------------- the replay remote
+    def _replay_call(self, fn, quiet=False) -> bool:
+        if self.rec is not None:      # never seek while a clip records
+            return False
+        if self.demo:
+            if not quiet:
+                self.set_status("Demo: no League here", EDGE_HI)
+            return False
+        if not self.this_open:
+            if not quiet:
+                self.set_status("Press “Watch replay” first", EDGE_HI)
+            return False
+
+        def work():
+            try:
+                fn()
+            except local.LocalError:
+                if not quiet:
+                    self.post(self.set_status, "The replay isn't answering",
+                              EDGE_HI)
+        threading.Thread(target=work, daemon=True).start()
+        return True
+
+    def jump(self, ms: float, speed: float | None = None):
+        sp = float(speed if speed is not None else self.prefs.get("speed",
+                                                                  1.0))
+        me = self._me() if self._follow_on() else None
+        self.preview_out = None
+
+        def go():
+            self.rapi.set_playback(time=max(ms / 1000, 0), paused=False,
+                                   speed=sp)
+            if me:      # a seek clears the lock: lock once it's done
+                self.rapi.follow_after_seek(*me)
+        if self._replay_call(go) and self.tl:
+            self.tl.set_playhead(ms)
+
+    def seek_to(self, ms: float):
+        self.jump(ms)
+
+    def preview(self):
+        if self.sel_i is None:
+            return
+        a, b = self.clip_range(self.sel_i)
+        self.jump(a, speed=1.0)
+        if self.this_open and self.rec is None and not self.demo:
+            self.preview_out = b
+            self.set_status("Preview %s – %s" % (fmt_time(a / 1000),
+                                                 fmt_time(b / 1000)))
+
+    def nudge(self, s):
+        me = self._me() if self._follow_on() else None
+        self.preview_out = None
+
+        def go():
+            pb = self.rapi.playback()
+            self.rapi.set_playback(time=pb.get("time", 0) + s)
+            if me:
+                self.rapi.follow_after_seek(*me)
+        self._replay_call(go)
+
+    def toggle_pause(self):
+        def go():
+            pb = self.rapi.playback()
+            self.rapi.set_playback(paused=not pb.get("paused", False))
+        self._replay_call(go)
+
+    def set_speed(self, v):
+        self.prefs.set("speed", v)
+        self._replay_call(lambda: self.rapi.set_playback(speed=v), quiet=True)
+
+    def follow_me(self):
+        on = not self._follow_on()
+        self.prefs.set("follow", on)
+        self._offscreen = 0
+        self._render_remote()
+        if not on:
+            self.set_status("Camera is yours — Follow me is off", DIM)
+            return
+        me = self._me()
+        if me:
+            self._replay_call(lambda: self.rapi.follow(*me), quiet=True)
+
+    def _now_ms(self) -> float | None:
+        """Where the replay is now: the last poll moved on by the time
+        since, at the replay's speed (no network call on the UI thread)."""
+        pb = self.playback
+        if pb is None or not self.this_open:
+            return None
+        t = pb.get("time", 0.0)
+        if not pb.get("paused"):
+            t += (time.monotonic() - getattr(self, "_pb_at",
+                                             time.monotonic())) \
+                * float(pb.get("speed") or 1.0)
+        return t * 1000
+
+    # ------------------------------------------------- client + replay
+    def _check_replay(self):
+        g = self.game
+        if g is None or self.demo or self.old_patch(g.version):
+            return
+        gid, match = g.game_id, self.match
+
+        def work():
+            try:
+                md = self.lcu.metadata(gid)
+                if not md:
+                    try:
+                        self.lcu.create_metadata(gid, match)
+                        md = self.lcu.metadata(gid)
+                    except local.LocalError:
+                        pass
+                st = md.get("state")
+                res = {"state": st, "text": local.REPLAY_STATE.get(
+                    st, st or "Unknown")}
+            except local.NotRunning:
+                res = {"state": "offline", "text": ""}
+            except local.LocalError as e:
+                res = {"state": "clienterror", "text": "Client: %s" % e}
+            self.post(done, res)
+
+        def done(res):
+            if self.game is None or self.game.game_id != gid:
+                return
+            self.replay_state = res
+            self._render_remote()
+        threading.Thread(target=work, daemon=True).start()
+
+    def _check_open(self):
+        """Is the open replay this game? (Same ten champions.)"""
+        if self.demo or self.game is None:
+            return
+        champs, gid = self._champs, self.game.game_id
+
+        def work():
+            self.post(done, recorder._replay_is(self.rapi, champs))
+
+        def done(ok):
+            if self.game is None or self.game.game_id != gid:
+                return
+            if ok != self.this_open:
+                self.this_open = ok
+                self._render_remote()
+                if self.tl and not ok:
+                    self.tl.set_playhead(None)
+        threading.Thread(target=work, daemon=True).start()
+
+    def open_replay(self):
+        """“Watch replay”: download if needed, start it, wait until it
+        answers (the same path as REPLAY's Watch)."""
+        g = self.game
+        if g is None or self.opening or self.rec is not None or self.demo:
+            return
+        self.opening = True
+        self.replay_state["msg"] = "Opening the replay…"
+        self._render_remote()
+        cancel = threading.Event()
+        self._open_cancel = cancel
+
+        def status(m):
+            self.replay_state["msg"] = m
+            self._render_remote()
+
+        def work():
+            err = None
+            try:
+                recorder.open_replay(self.lcu, self.rapi, g.game_id,
+                                     self.match, self._champs, cancel,
+                                     status=lambda m: self.post(status, m))
+            except recorder.NotRecordable as e:
+                err = "Can't play this replay: %s" % e
+            except local.NotRunning:
+                err = "Start the League client first"
+            except recorder.Cancelled:
+                err = "Cancelled"
+            except (local.LocalError, TimeoutError, OSError) as e:
+                err = str(e)
+            self.post(done, err)
+
+        def done(err):
+            self.opening = False
+            if err:
+                self.set_status(err, BAD)
+            elif self.game is g:
+                self.this_open = True
+                self.set_status("Replay open — click a block to jump to it",
+                                GOOD)
+                if self.sel_i is not None:
+                    self.root.after(1500, lambda: self.sel_i is not None
+                                    and self.jump(self.clip_range(
+                                        self.sel_i)[0]))
+            self._render_remote()
+        threading.Thread(target=work, daemon=True).start()
+
+    def _poll_local(self):
+        """Every second (4× a second during a preview): client up, replay
+        open, where it is; is it still this game (every 5 s)."""
+        me = self._me() if self._follow_on() else None
+        self._polls += 1
+        check = self._polls % 5 == 1
+        busy = self.rec is not None
+        follow = self.this_open and not busy
+
+        def work():
+            ok = self.lcu.running()
+            try:
+                pb = self.rapi.playback()
+            except local.LocalError:
+                pb = None
+            # bring the camera back — never while a clip records
+            if pb is not None and me and follow and not pb.get("seeking"):
+                self._keep_on_me(me)
+            self.post(done, ok, pb)
+
+        def done(ok, pb):
+            was_ok, was_open = self.client_ok, self.playback is not None
+            before = self._remote_key()
+            self.client_ok, self.playback = ok, pb
+            self._pb_at = time.monotonic()
+            if pb is None:
+                self.this_open = False
+            self._banner()
+            if ok != was_ok and self.game is not None:
+                self._check_replay()
+            if pb is not None and (not was_open or check):
+                self._check_open()
+            if self._remote_key() != before:
+                self._render_remote()
+            if self.tl:
+                self.tl.set_playhead(pb.get("time", 0) * 1000
+                                     if pb is not None and self.this_open
+                                     else None)
+            if self.preview_out is not None and pb is not None and \
+                    pb.get("time", 0) * 1000 >= self.preview_out:
+                self.preview_out = None
+                self._replay_call(lambda: self.rapi.set_playback(
+                    paused=True), quiet=True)
+            if self._alive:
+                self.root.after(250 if self.preview_out else 1000,
+                                self._poll_local)
+        threading.Thread(target=work, daemon=True).start()
+
+    # ------------------------------------------------------ saving
+    def save(self):
+        g = self.game
+        i = self.sel_i
+        if g is None or i is None or self.rec is not None:
+            return
+        if self.old_patch(g.version):
+            self.set_status("Can't save: this game is on an old patch and "
+                            "Riot only keeps replays for the current patch",
+                            BAD)
+            return
+        a, b = self.clip_range(i)
+        clip = Clip(a / 1000, b / 1000, self.clip_path(i), self.hl[i].title)
+        self.cancel = cancel = threading.Event()
+        self.preview_out = None
+        self.rec = {"clip": clip, "i": i, "p": Progress("loading", 0, 1),
+                    "msg": ""}
+        self.results = []
+        if self.tl:
+            self.tl.locked = True
+            self.tl.set_progress(0.0)
+        self._render_clip()
+        self._render_remote()
+        self.set_status("Saving %s — League plays it once (about %s)" % (
+            clip.target.name, _dur(clip.end_s - clip.start_s
+                                   + score.SETUP_S)))
+        me = self._me()
+        prog = lambda p: self.post(self._on_progress, p)    # noqa: E731
+        is_open = self.this_open
+
+        def work():
+            err = None
+            res: list[ClipResult] = []
+            try:
+                if self.demo:
+                    res = _simulate([clip], prog, cancel)
+                else:
+                    if not is_open:
+                        recorder.open_replay(
+                            self.lcu, self.rapi, g.game_id, self.match,
+                            self._champs, cancel,
+                            status=lambda m: self.post(self._on_load, m))
+                    rec = recorder.Recorder(self.rapi, *me, on_progress=prog,
+                                            cancel=cancel)
+                    res = rec.record_all([clip])
+            except recorder.Cancelled:
+                err = "Cancelled"
+            except recorder.NotRecordable as e:
+                err = ("Can't record this game: %s. Riot keeps replays only "
+                       "for the current patch." % e)
+            except local.NotRunning:
+                err = "Start the League client first, then save again"
+            except (local.LocalError, TimeoutError, OSError) as e:
+                err = str(e)
+            except Exception as e:                  # never leave it hanging
+                self._log(traceback.format_exc())
+                err = "%s: %s" % (e.__class__.__name__, e)
+            self.post(self._finished, res, err, cancel.is_set())
+        threading.Thread(target=work, daemon=True).start()
+
+    def cancel_saving(self):
+        if self.cancel is not None:
+            self.cancel.set()
+            self.set_status("Cancelling…", EDGE_HI)
+
+    def _on_load(self, msg):
+        if self.rec is not None:
+            self.rec["msg"] = msg
+            self._update_progress()
+
+    def _on_progress(self, p: Progress):
+        if self.rec is None:
+            return
+        self.rec["p"] = p
+        if p.phase == "error":
+            self.rec["msg"] = p.message
+        if self.tl and p.phase in ("recording", "saving"):
+            self.tl.set_progress(p.frac)
+        self._update_progress()
+
+    def _update_progress(self):
+        r = self.rec
+        lbl, bar = getattr(self, "rec_lbl", None), getattr(self, "rec_bar",
+                                                            None)
+        if r is None or lbl is None or not lbl.winfo_exists():
+            return
+        p: Progress = r["p"]
+        c: Clip = r["clip"]
+        if p.phase == "loading":
+            text = r["msg"] or "Getting the replay ready…"
+        else:
+            text = {"seeking": "Jumping to the clip…",
+                    "camera": "Camera on you…",
+                    "window": "Click League's replay window — it has to be "
+                    "on screen to record",
+                    "recording": "● Recording  %s left" % _dur(
+                        (1 - p.frac) * (c.end_s - c.start_s)),
+                    "saving": "Saving the file…",
+                    "error": "Failed: %s" % p.message, "done": "Done",
+                    "cancelled": "Cancelled"}.get(p.phase, p.phase)
+        lbl.configure(text=text, fg=BAD if p.phase in ("error", "recording")
+                      else FG)
+        if bar is not None:
+            bar.set(p.frac if p.phase in ("recording", "saving") else 0.0)
+
+    def _finished(self, results: list[ClipResult], err: str | None,
+                  cancelled: bool):
+        self.rec = None
+        self.cancel = None
+        self.results = results
+        if self.tl:
+            self.tl.locked = False
+            self.tl.set_progress(None)
+        ok = [r for r in results if r.ok]
+        bad = [r for r in results if not r.ok]
+        if self.demo and not err:
+            self.set_status("Demo: the clip would have been saved — nothing "
+                            "was recorded", EDGE_HI)
+        elif err and not ok:
+            self.set_status(err, EDGE_HI if cancelled else BAD)
+        elif bad:
+            self.set_status("Couldn't save: %s" % bad[0].error, BAD)
+        else:
+            self.set_status("Saved %s" % ok[0].path.name, GOOD)
+        if self.view == "editor" and self.game is not None:
+            if self.tl:
+                self.tl.set(self.game.duration_s * 1000, self.game.moments,
+                            self._spans(), self.sel_i)
+            self._render_clip()
+            self._render_saved()
+            self._render_remote()
 
     # ======================================================= CLIPS view
     def _view_clips(self):
@@ -923,14 +1154,38 @@ class App:
         W.button(top, "Open folder", lambda: self.open_folder(root),
                  font=F_SM).pack(side="right")
         if not games:
-            tk.Label(p, text="No clips yet. Pick a game under Record, tick "
-                     "the moments you want and press Record selected.",
+            tk.Label(p, text="No clips yet. In the Editor, click a block on "
+                     "the timeline, trim it and press Save clip.",
                      bg=PANEL, fg=DIM, font=F_SM).pack(anchor="w",
                                                        pady=(SP_M, 0))
         for _, d, fs in games:
             W.caption(p, d.name.replace("_", "  ").upper())
             for f in fs:
                 self._clip_row(p, f)
+
+    # ------------------------------------------------------ keyboard
+    def _bind_keys(self):
+        def guard(fn):
+            def h(e):
+                if isinstance(e.widget, (tk.Text, tk.Entry)):
+                    return None
+                if self.view == "editor":
+                    fn()
+                return "break"
+            return h
+        r = self.root
+        r.bind("<space>", guard(self.toggle_pause))
+        r.bind("<Left>", guard(lambda: self.nudge(-10)))
+        r.bind("<Right>", guard(lambda: self.nudge(10)))
+        r.bind("<Return>", guard(self.preview))
+        for keys, fn in ((("n", "N"), lambda: self.step(1)),
+                         (("p", "P"), lambda: self.step(-1)),
+                         (("i", "I"), lambda: self.set_edge("in")),
+                         (("o", "O"), lambda: self.set_edge("out")),
+                         (("s", "S"), self.save),
+                         (("f", "F"), self.follow_me)):
+            for k in keys:
+                r.bind("<%s>" % k, guard(fn))
 
     # ------------------------------------------------------ settings
     def show_settings(self):
@@ -941,11 +1196,11 @@ class App:
         body.pack(padx=1, pady=1)
         W.section_title(body, "SETTINGS", EDGE_HI)
         W.caption(body, "VIDEO", pady=(0, SP_XS))
-        tk.Label(body, text="League records its own window: the video is "
-                 "as big as League's window (Video settings in the game), "
-                 "in real time, as smooth as your PC renders while "
-                 "encoding. Highlights brings the replay to the front for "
-                 "each clip — leave it there until the clip is done.",
+        tk.Label(body, text="League records its own window: the clip is as "
+                 "big as League's window, in real time. Run League "
+                 "borderless (Video → Window mode) to keep the replay and "
+                 "this window side by side; in full screen Highlights "
+                 "brings the replay to the front while it records.",
                  bg=PANEL, fg=FG, font=F_SM, wraplength=px(380),
                  justify="left").pack(anchor="w")
         fields = {}
@@ -983,11 +1238,7 @@ class App:
             self.install = local.install_dir(self.prefs.get("league_dir"))
             self.lcu = local.LeagueClient(self.install)
             d.destroy()
-            if self.view == "record":
-                self._fill_games()
-                self._render_game()
-            else:
-                self.navigate(self.view)
+            self.navigate(self.view)
         W.button(body, "Save", save, gold=True).pack(anchor="e",
                                                     pady=(SP_L, 0))
         tk.Label(body, text=LEGAL, bg=PANEL, fg=mix(DIM, PANEL, 0.3),
@@ -1007,6 +1258,8 @@ class App:
         try:
             if self.cancel is not None:
                 self.cancel.set()      # the worker stops the recorder
+            if getattr(self, "_open_cancel", None) is not None:
+                self._open_cancel.set()
             g = self.root.geometry()
             if window.remember(g):              # never off-screen
                 self.prefs.set("geometry", g)
@@ -1034,7 +1287,7 @@ def _videos(folder: Path) -> list[Path]:
 
 def _simulate(clips: list[Clip], prog, cancel: threading.Event,
               step: float = 0.05, per_clip: float = 1.5) -> list[ClipResult]:
-    """--demo: the recording flow without a game (nothing is written)."""
+    """--demo: the saving flow without a game (nothing is written)."""
     out = []
     n = len(clips)
     for i, c in enumerate(clips):
@@ -1047,6 +1300,6 @@ def _simulate(clips: list[Clip], prog, cancel: threading.Event,
             prog(Progress("recording", i, n, (j + 1) / k, c.title))
             if cancel.wait(step):
                 raise recorder.Cancelled()
-        out.append(ClipResult(c, True, None))
+        out.append(ClipResult(c, True, c.target))
     prog(Progress("done", n, n, 1.0))
     return out

@@ -87,12 +87,14 @@ INSTALL_HIGHLIGHTS = """HIGHLIGHTS – så kommer du igång
 3. Klicka "Account", skriv ditt Riot ID (namn#tagg) och tryck
    "Fetch new games".
 
-4. Starta League-klienten, välj en match, bocka i de höjdpunkter du vill
-   ha och tryck "Record selected". Klippen hamnar i Videos\\Highlights.
+4. Ställ League på Borderless (Video -> Window mode), så syns repriset och
+   Highlights samtidigt. Starta League-klienten, tryck "Watch replay".
 
-Inspelningen sker i realtid via League. Highlights lägger repriset överst
-medan ett klipp spelas in (League spelar bara in när fönstret syns) – rör
-inte repriset och klicka inte bort det förrän klippet är klart. Replays fungerar bara på samma patch som matchen spelades.
+5. Klicka på ett block på tidslinjen för att hoppa dit, dra i kanterna för
+   att korta eller förlänga klippet och tryck "Save clip". League spelar
+   upp just den biten en gång och spelar in den (Videos\\Highlights).
+
+Replays fungerar bara på samma patch som matchen spelades.
 """
 
 

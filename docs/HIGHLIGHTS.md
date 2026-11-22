@@ -1,8 +1,28 @@
 # HIGHLIGHTS
 
-Fourth app in the DRAFT / REVIEW / REPLAY family: finds your best moments
-in a game and records them as video clips with League's own replay
-recorder.
+Fourth app in the DRAFT / REVIEW / REPLAY family: a small editor for your
+replays. You watch the replay in League; Highlights shows the whole game as
+a timeline (kills, highlight blocks, objectives) with a playhead that
+follows the replay. Click a block to jump there, drag its edges to trim it,
+and save just that part as a video with League's own replay recorder.
+
+```
+GAME      Sona vs Pantheon · Victory 8/6/32       ⟲10 ❚❚ 10⟳ ◎ Follow me 0.5× 1× 2×
+TIMELINE  0      5:00     10:00     15:00 …
+  KILLS        ○  ✕ ●   ●●     ●    ✕
+  HIGHL.        ▬▬   [██76██]    ▬▬   ███51██        <- drag the edges to trim
+  OBJ.       ◆         ◆           ◆
+CLIP      Double kill · IN −1 10:04 +1 · OUT −1 10:20 +1 · 15 s   ▷ Preview  ● Save clip
+SAVED     ▶ 10m_double.webm   4.1 MB
+```
+
+Keys: Space play/pause · ←/→ 10 s · N/P next/previous clip · I/O set in/out
+at the playhead · Enter preview · S save · F follow me.
+
+Run League **borderless** (Video → Window mode) so the replay and this
+window are on screen together; in full screen the game hides as soon as you
+click Highlights (and can't be recorded then — Highlights brings it back to
+the front while it records).
 
 * **Before the game:** DRAFT
 * **After the game:** REPLAY (watch, tag, write) · HIGHLIGHTS (clips)
@@ -34,7 +54,9 @@ replay to the front for each clip and itself back when done.
 | Scoring + clips | pure logic, no I/O | `highlights/score.py` |
 | Open the replay | LCU: metadata → create → download → watch, then wait for the Replay API | `highlights/recorder.py · open_replay` |
 | Record | Replay API `/replay/recording` | `highlights/recorder.py · Recorder` |
-| Window | Record / Clips views; REPLAY's account dialog, fetch and UI queue reused as-is | `highlights/app.py` |
+| Timeline | kills · highlight blocks (trim handles) · objectives, playhead; `Pen` drawing + canvas items for selection/playhead | `highlights/timeline.py` |
+| League's window | find it, is it visible, bring it to the front | `highlights/gamewindow.py` |
+| Window | Editor (remote, timeline, clip, saved clips) / Clips; game picker dialog; REPLAY's account dialog, fetch, UI queue and camera keep-on-me reused as-is | `highlights/app.py` |
 
 ### Scoring (`score.py`)
 
@@ -47,10 +69,9 @@ Atakhan 14, Dragon 8, Herald 8, Grubs 5 (+4 for the last hit), tower 4,
 inhibitor 6 · 3+ takedowns in one clip = teamfight +8.
 
 Beats ≤ 15 s apart become one clip (teamfight + Baron), max 75 s. A clip
-starts 8 s before the first beat and ends 4 s after the last. The best
-clips (≤ 5, score ≥ 15 and ≥ 30 % of the best) are ticked from the start.
-Estimated time = clip lengths + 12 s per clip (+ 45 s if the replay isn't
-open yet): recording is real time.
+starts 8 s before the first beat and ends 4 s after the last; trim it on
+the timeline. The editor opens on the best clip. Saving takes the clip's
+length + ~12 s (seek, camera, encoder): recording is real time.
 
 ### Recording flow (`recorder.py`)
 

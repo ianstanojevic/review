@@ -1,7 +1,7 @@
 """Run the HIGHLIGHTS desktop app.
 
     python -m highlights
-    python -m highlights --demo [--snapshot OUT.png] [--view record|clips]
+    python -m highlights --demo [--snapshot OUT.png] [--view editor|clips]
 
 ``--demo`` opens a throwaway data folder with two bundled test games (no
 API calls, no League client); Record simulates the flow and writes
@@ -45,8 +45,8 @@ def main(argv=None):
     ap = argparse.ArgumentParser(prog="highlights")
     ap.add_argument("--demo", action="store_true")
     ap.add_argument("--snapshot")
-    ap.add_argument("--view", default="record")
-    ap.add_argument("--size", default="1320x900")
+    ap.add_argument("--view", default="editor")
+    ap.add_argument("--size", default="1320x620")
     args = ap.parse_args(argv)
 
     player = _demo_data() if args.demo else None
@@ -69,7 +69,7 @@ def main(argv=None):
     app.root.geometry("%dx%d+%d+20" % (px(w), px(h), -6000 if windows else 0))
 
     def shot():
-        if args.view != "record":
+        if args.view != "editor":
             app.navigate(args.view)
         app.root.after(1500, grab)
 
