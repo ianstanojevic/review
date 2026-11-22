@@ -10,12 +10,16 @@
 
 </div>
 
-Type a Riot ID and Review reads your last ranked games straight from Riot. It scores eight skills against players in your role, finds what you do better and worse than them, and gives one concrete thing to work on. Pick **Gold, Plat, Emerald, Diamond or Master+** and every chart shows where that rank sits. Every number comes from real games and says how sure it is. *(Click any picture to enlarge.)*
+Type a Riot ID and Review reads your last ranked games straight from Riot. It scores eight skills against players in your role, finds what you do better and worse than them, and gives one concrete thing to work on. Pick **Gold, Plat, Emerald, Diamond or Master+** and every chart shows where that rank sits — or add your friends and see who's better at what. Every number comes from real games and says how sure it is. *(Click any picture to enlarge.)*
 
 <table>
 <tr>
 <td width="50%" valign="top"><b>Performance radar</b><br>Eight skills, each scored against players in your role. 50 is the average of the rank you compare with.<br><br><img src="docs/github/02-radar.png" alt="Performance radar"></td>
 <td width="50%" valign="top"><b>Click any skill</b><br>What it is made of, how it changed, your best and worst games — and what to work on.<br><br><img src="docs/github/03-drill-down.png" alt="Skill drill-down"></td>
+</tr>
+<tr>
+<td width="50%" valign="top"><b>Compare with your friends</b> <sub>NEW</sub><br>Add up to five Riot IDs: radars on top of each other and who's first, all on one rank's scale.<br><br><img src="docs/github/11-compare.png" alt="Compare players"></td>
+<td width="50%" valign="top"><b>Head to head</b> <sub>NEW</sub><br>Every skill and stat side by side. Teal is the best in the group, red the lowest.<br><br><img src="docs/github/12-head-to-head.png" alt="Head to head"></td>
 </tr>
 <tr>
 <td width="50%" valign="top"><b>Compare with any rank</b><br>A dashed line shows where the rank you picked is. Verdicts only appear when a change is real.<br><br><img src="docs/github/04-trends-vs-rank.png" alt="Trends against Master+"></td>
@@ -36,7 +40,7 @@ Type a Riot ID and Review reads your last ranked games straight from Riot. It sc
 
 ## Install
 
-1. Download `Review-v1.0-windows.zip` from the [latest release](../../releases/latest) and unzip it.
+1. Download `Review-v1.1-windows.zip` from the [latest release](../../releases/latest) and unzip it.
 2. Run `Review.exe`. If Windows says *"protected your PC"*, click **More info → Run anyway** (the file isn't code-signed).
 3. Type a Riot ID (`Name#TAG`), pick the region and press **Analyze**. The first time takes a few minutes while your games download — after that it's instant.
 

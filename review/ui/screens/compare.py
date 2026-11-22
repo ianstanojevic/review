@@ -413,10 +413,12 @@ class CompareScreen(Screen):
         me = players[0][2].radar
         lead, trail = [], []
         for j, ax in enumerate(me.axes):
-            others = [t[2].radar.axes[j].score for t in players[1:]]
-            if ax.score > max(others):
+            # compare the numbers as shown (rounded), like the table does
+            others = [round(t[2].radar.axes[j].score) for t in players[1:]]
+            mine = round(ax.score)
+            if mine > max(others):
                 lead.append(AXIS_LABEL[ax.axis])
-            elif ax.score < min(others):
+            elif mine < min(others):
                 trail.append(AXIS_LABEL[ax.axis])
         n = len(players)
         place = ["1st", "2nd", "3rd", "4th", "5th", "6th"][my_place]

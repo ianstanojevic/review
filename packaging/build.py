@@ -88,8 +88,12 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--no-key", action="store_true")
     ap.add_argument("--app", choices=sorted(APPS), default="review")
+    ap.add_argument("--dist", help="output folder (default: release/); "
+                    "use another one when the release copy is running")
     a = ap.parse_args()
-    global APP
+    global APP, DIST
+    if a.dist:
+        DIST = Path(a.dist).resolve()
     spec, name, pkg = APPS[a.app]
     APP = DIST / name
     keyfile = ROOT / "review" / "_bundled_key.py"
@@ -134,6 +138,7 @@ def main() -> int:
 
 
 def _pyinstaller(spec="review.spec"):
+    # DIST is read at call time (main() may have changed it)
     return subprocess.run([sys.executable, "-m", "PyInstaller", "--noconfirm",
                         "--log-level", "WARN", "--distpath", str(DIST),
                         "--workpath", str(ROOT / "build" / "release"),

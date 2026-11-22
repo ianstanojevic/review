@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "review"
-version = "1.0.0"
+version = "1.1.0"
 description = "REVIEW — League of Legends ranked account analyzer (companion to DRAFT)"
 requires-python = ">=3.11"
 dependencies = ["numpy>=1.26", "Pillow>=10"]

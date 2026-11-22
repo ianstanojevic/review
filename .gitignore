@@ -12,3 +12,4 @@ release/
 review/_bundled_key.py
 docs/readme_preview.html
 *.egg-info/
+docs/replay_repo_preview.html
