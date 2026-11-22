@@ -499,6 +499,20 @@ class CompareScreen(Screen):
                 vals.append(m.mean)
                 texts.append(fmt_value(key, m.mean))
             add(label, vals, texts, higher_better=pol >= 0)
+        # each player column as wide as its longest text ("Challenger 3662
+        # LP" overflowed a fixed 12-character column into its neighbour);
+        # measured in pixels, since Col.width counts "0"-widths
+        import tkinter.font as tkfont
+        from ...theme.tokens import F_SM, F_XS_B
+        f_cell, f_head = tkfont.Font(font=F_SM), tkfont.Font(font=F_XS_B)
+        zero = max(f_cell.measure("0"), 1)
+        for c in cols[1:]:
+            texts = [r.cells[c.key][0] if isinstance(r.cells.get(c.key),
+                                                     tuple)
+                     else str(r.cells.get(c.key, "")) for r in rows]
+            px_w = max([f_cell.measure(t) for t in texts] +
+                       [f_head.measure(c.title)])
+            c.width = max(c.width, -(-px_w // zero) + 1)
         t = Table(p, cols, rows_visible=len(rows), tooltip=self.tip)
         t.set_rows(rows)
         t.pack(fill="x")
