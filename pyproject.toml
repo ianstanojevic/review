@@ -11,6 +11,7 @@ dependencies = ["numpy>=1.26", "Pillow>=10"]
 
 [project.scripts]
 review-replay = "replay.__main__:main"
+review-highlights = "highlights.__main__:main"
 
 [project.optional-dependencies]
 dev = ["pytest>=8"]
@@ -18,7 +19,8 @@ build = ["pyinstaller>=6"]
 
 [tool.setuptools]
 packages = ["review", "review.analysis", "review.cache", "review.riot_client",
-            "review.theme", "review.ui", "review.ui.screens", "replay"]
+            "review.theme", "review.ui", "review.ui.screens", "replay",
+            "highlights"]
 
 [tool.setuptools.package-data]
 "review.analysis" = ["weights.toml"]

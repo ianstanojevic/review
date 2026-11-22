@@ -27,6 +27,7 @@ APP = DIST / "Review"
 APPS = {   # --app: spec, folder/exe name, package with __version__
     "review": ("review.spec", "Review", "review"),
     "replay": ("replay.spec", "Replay", "replay"),
+    "highlights": ("highlights.spec", "Highlights", "highlights"),
 }
 
 
@@ -71,6 +72,26 @@ INSTALL_REPLAY = """REPLAY – så kommer du igång
 
 Tips: tryck N för att hoppa till nästa dödsfall du inte taggat.
 Replays fungerar bara på samma patch som matchen spelades – tagga samma dag.
+"""
+
+
+INSTALL_HIGHLIGHTS = """HIGHLIGHTS – så kommer du igång
+
+1. Packa upp hela mappen "Highlights" var du vill (t.ex. på skrivbordet).
+   Allt i mappen behövs – flytta inte ut bara Highlights.exe.
+
+2. Dubbelklicka på Highlights.exe.
+   Visar Windows "Windows skyddade datorn": klicka på "Mer information"
+   och sedan "Kör ändå". (Programmet är inte signerat, därför varningen.)
+
+3. Klicka "Account", skriv ditt Riot ID (namn#tagg) och tryck
+   "Fetch new games".
+
+4. Starta League-klienten, välj en match, bocka i de höjdpunkter du vill
+   ha och tryck "Record selected". Klippen hamnar i Videos\\Highlights.
+
+Inspelningen sker i realtid via League: rör inte repriset medan ett klipp
+spelas in. Replays fungerar bara på samma patch som matchen spelades.
 """
 
 
@@ -120,7 +141,8 @@ def main() -> int:
         print("PyInstaller failed — is %s.exe still running?" % name)
         return r.returncode
     (APP / ".env").unlink(missing_ok=True)    # no key file next to the exe
-    text = INSTALL_REPLAY if a.app == "replay" else (
+    text = {"replay": INSTALL_REPLAY,
+            "highlights": INSTALL_HIGHLIGHTS}.get(a.app) or (
         INSTALL_KEY if key else INSTALL_NO_KEY)
     (APP / "INSTALLERA.txt").write_text(text, encoding="utf-8-sig")
     sys.path.insert(0, str(ROOT))

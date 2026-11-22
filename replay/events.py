@@ -186,10 +186,12 @@ def _moments(g: GameView, timeline: dict) -> list[Moment]:
                 out.append(_death(g, frames, e, enemy_obj_times))
             elif killer == me:
                 out.append(Moment(t, "kill", "Killed %s" % (
-                    g.champ(e.get("victimId")) or "?"), x, y))
+                    g.champ(e.get("victimId")) or "?"), x, y,
+                    detail=_kill_detail(frames, e, me)))
             elif me in assists:
                 out.append(Moment(t, "assist", "Assist on %s" % (
-                    g.champ(e.get("victimId")) or "?"), x, y))
+                    g.champ(e.get("victimId")) or "?"), x, y,
+                    detail=_kill_detail(frames, e, me)))
         elif typ == "ELITE_MONSTER_KILL":
             name = EPIC.get(e.get("monsterSubType") or "") or EPIC.get(
                 e.get("monsterType") or "") or "Monster"
@@ -199,7 +201,7 @@ def _moments(g: GameView, timeline: dict) -> list[Moment]:
             ours = e.get("killerTeamId") == team
             out.append(Moment(t, "objective", "%s %s" % (
                 "Your team took" if ours else "Enemy took", name), x, y,
-                ours=ours))
+                ours=ours, detail=_took(e, me) | {"name": name}))
         elif typ == "BUILDING_KILL":
             ours = e.get("teamId") != team        # teamId = building owner
             what = "Inhibitor" if e.get("buildingType") == "INHIBITOR_BUILDING" \
@@ -207,8 +209,31 @@ def _moments(g: GameView, timeline: dict) -> list[Moment]:
                     "_LANE", "").title()
             out.append(Moment(t, "tower", "%s: %s" % (
                 "Destroyed" if ours else "Lost", what.strip()), x, y,
-                ours=ours))
+                ours=ours, detail=_took(e, me) | {"name": what.strip()}))
     return out
+
+
+def _kill_detail(frames, e, me) -> dict:
+    """A kill you made or helped with: who, with whom, what it was worth
+    and how far behind (or ahead) of the victim you were in gold."""
+    killer = e.get("killerId", 0)
+    victim = e.get("victimId", 0)
+    a, b = _gold(frames, e.get("timestamp", 0), me), _gold(
+        frames, e.get("timestamp", 0), victim)
+    return {"killer": killer, "victim": victim,
+            "assists": [p for p in (e.get("assistingParticipantIds") or [])
+                        if p],
+            "bounty": e.get("bounty") or 0,
+            "shutdown": e.get("shutdownBounty") or 0,
+            "gold_diff": a - b if a is not None and b is not None else None}
+
+
+def _took(e, me) -> dict:
+    """Objective/tower: whether you took part (last hit or assist)."""
+    killer = e.get("killerId", 0)
+    assists = [p for p in (e.get("assistingParticipantIds") or []) if p]
+    return {"killer": killer, "assists": assists,
+            "mine": killer == me or me in assists}
 
 
 def _death(g: GameView, frames, e, enemy_obj_times) -> Moment:
