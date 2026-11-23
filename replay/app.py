@@ -42,7 +42,8 @@ from .model import (AVOIDABLE, BOOKMARK, CATEGORIES, DEATH,
                     DEATH_CATEGORIES, KINDS, LANE_RATING, MISSED,
                     MISSED_CATEGORIES, category_label, fmt_time)
 from .notes import Mark, Matchup, Notes, notes_path
-from .widgets import AMBER, MARK_COLOR, Chips, MiniMap, TimelineBar
+from .widgets import (AMBER, MARK_COLOR, Chips, MiniMap, MomentList,
+                      MomentRow, TimelineBar)
 
 VIEWS = [("review", "Review"), ("insights", "Insights"),
          ("matchups", "Matchups")]
@@ -359,6 +360,15 @@ class App:
         if not self._docked:
             left.lift()                        # slides in over the game
 
+    def _after_slide(self, fn):
+        """Run ``fn`` now, or when the drawer has finished sliding (a
+        page rebuild mid-slide makes the slide stutter)."""
+        if getattr(self, "_slide_job", None):
+            self._after_slide_fns = getattr(self, "_after_slide_fns", [])
+            self._after_slide_fns.append(fn)
+        else:
+            fn()
+
     def _slide(self, target: float):
         job = getattr(self, "_slide_job", None)
         if job:
@@ -378,6 +388,11 @@ class App:
             if k < n:
                 self._slide_job = self.root.after(
                     self.SLIDE_MS // n, lambda: step(k + 1))
+            else:
+                fns, self._after_slide_fns = getattr(
+                    self, "_after_slide_fns", []), []
+                for fn in fns:
+                    fn()
         step()
 
     # -------------------------------------------------------- data in
@@ -665,64 +680,111 @@ class App:
                 self.navigate("review")
             else:
                 self._fill_games()
-                self._render_game()
+                self._after_slide(self._render_game)
             self._check_replay()
         threading.Thread(target=work, daemon=True).start()
 
     def _render_game(self):
+        """Show ``self.game``. The page (header, timeline, moments, tag
+        editor, matchup) is built once and then refilled for each game:
+        on Windows every widget is a native window, and building, laying
+        out and destroying ~120 of them per switch froze the UI for half a
+        second. A new page is built off-screen and swapped in whole; the
+        old one is torn down afterwards a panel at a time."""
         if not getattr(self, "right", None) or not self.right.winfo_exists():
             return
-        body = self.right.body
-        _clear(body)
-        self.tl = None
         g = self.game
+        pg = getattr(self, "_page", None)
+        if g is not None and pg and pg["body"] is self.right.body \
+                and pg["body"].winfo_exists():
+            self._fill_page(g)
+            return
+        body = self.right.fresh_body()
+        self.tl = None
+        self._moment_list = self._tag_ed = self._page = None
         if g is None:
             p, _ = panel(body, "GAME")
             tk.Label(p, text="Pick a game on the left. New games: "
                      "“Fetch new games” (uses Review's key and cache).",
                      bg=PANEL, fg=DIM, font=F_SM).pack(anchor="w")
-            return
-        self._game_header(body, g)
-        self._timeline_panel(body, g)
-        row = tk.Frame(body, bg=DARK_BG)
-        row.pack(fill="x", pady=(SP_M, 0))
-        row.grid_columnconfigure(0, weight=2, uniform="r")
-        row.grid_columnconfigure(1, weight=3, uniform="r")
-        lp = W.CutPanel(row, padx=14, fill=True)
-        lp.grid(row=0, column=0, sticky="nsew", padx=(0, SP_M))
-        rp = W.CutPanel(row, padx=14, fill=True)
-        rp.grid(row=0, column=1, sticky="nsew")
-        self.moments_box, self.tag_box = lp.inner, rp.inner
+        else:
+            self._page = {"body": body}
+            self._game_header(body)
+            self._timeline_panel(body)
+            row = tk.Frame(body, bg=DARK_BG)
+            row.pack(fill="x", pady=(SP_M, 0))
+            row.grid_columnconfigure(0, weight=2, uniform="r")
+            row.grid_columnconfigure(1, weight=3, uniform="r")
+            lp = W.CutPanel(row, padx=14, fill=True)
+            lp.grid(row=0, column=0, sticky="nsew", padx=(0, SP_M))
+            rp = W.CutPanel(row, padx=14, fill=True)
+            rp.grid(row=0, column=1, sticky="nsew")
+            self.moments_box, self.tag_box = lp.inner, rp.inner
+            self._matchup_panel(body)
+            self._fill_page(g)
+        old = self.right.swap_body(body)
+        self._destroy_gently(old)
+
+    def _fill_page(self, g: GameView):
+        self._fill_header(g)
+        self._fill_timeline(g)
         self._render_moments()
         self._render_tag()
-        self._matchup_panel(body, g)
+        self._fill_matchup(g)
+
+    def _destroy_gently(self, w):
+        kids = list(w.winfo_children())
+
+        def step():
+            if not w.winfo_exists():
+                return
+            if kids:
+                k = kids.pop()
+                if k.winfo_exists():
+                    k.destroy()
+                self.root.after(15, step)
+            else:
+                w.destroy()
+        self.root.after(30, step)
 
     # header + replay remote
-    def _game_header(self, body, g: GameView):
-        p, rl = panel(body, "GAME", right="%s · patch %s · %s" % (
-            QUEUE_SHORT.get(g.queue, g.queue), g.patch, _date(g.created_ms)))
+    def _game_header(self, body):
+        pg = self._page
+        p, pg["hdr_right"] = panel(body, "GAME", right="")
         top = tk.Frame(p, bg=PANEL)
         top.pack(fill="x")
-        ic = self.icons.get(g.me.champion, px(44),
-                            lambda: self._render_game())
-        if ic is not None:
-            tk.Label(top, image=ic, bg=PANEL).pack(side="left",
-                                                   padx=(0, SP_L))
-        t = tk.Frame(top, bg=PANEL)
+        pg["icon"] = tk.Label(top, bg=PANEL)
+        pg["icon"].pack(side="left", padx=(0, SP_L))
+        t = pg["hdr_text"] = tk.Frame(top, bg=PANEL)
         t.pack(side="left")
-        name = static.champion_name(g.me.champion)
-        vs = static.champion_name(g.opponent.champion) if g.opponent else "?"
-        tk.Label(t, text="%s  vs  %s" % (name, vs), bg=PANEL, fg=FG,
-                 font=F_LG_B).pack(anchor="w")
-        res, res_fg = result_text(g)
-        sub = "%s · %s · %s · %d CS · %s" % (
-            res, ROLE_SHORT.get(g.me.role or "", "?"),
-            g.kda_text, g.cs, fmt_time(g.duration_s))
-        tk.Label(t, text=sub, bg=PANEL, fg=res_fg,
-                 font=F_SM).pack(anchor="w")
+        pg["title"] = tk.Label(t, bg=PANEL, fg=FG, font=F_LG_B)
+        pg["title"].pack(anchor="w")
+        pg["sub"] = tk.Label(t, bg=PANEL, font=F_SM)
+        pg["sub"].pack(anchor="w")
         # replay remote
         self.remote = tk.Frame(top, bg=PANEL)
         self.remote.pack(side="right")
+
+    def _fill_header(self, g: GameView):
+        pg = self._page
+        pg["hdr_right"].configure(text="%s · patch %s · %s" % (
+            QUEUE_SHORT.get(g.queue, g.queue), g.patch, _date(g.created_ms)))
+        ic = self.icons.get(g.me.champion, px(44),
+                            lambda: self._render_game())
+        pg["icon_ref"] = ic
+        if ic is not None:
+            pg["icon"].configure(image=ic)
+            pg["icon"].pack(side="left", padx=(0, SP_L),
+                            before=pg["hdr_text"])
+        else:
+            pg["icon"].pack_forget()
+        name = static.champion_name(g.me.champion)
+        vs = static.champion_name(g.opponent.champion) if g.opponent else "?"
+        pg["title"].configure(text="%s  vs  %s" % (name, vs))
+        res, res_fg = result_text(g)
+        pg["sub"].configure(text="%s · %s · %s · %d CS · %s" % (
+            res, ROLE_SHORT.get(g.me.role or "", "?"),
+            g.kda_text, g.cs, fmt_time(g.duration_s)), fg=res_fg)
         self._render_remote()
 
     def _render_remote(self):
@@ -984,15 +1046,12 @@ class App:
             self._offscreen = 0
 
     # timeline
-    def _timeline_panel(self, body, g: GameView):
-        p, rl = panel(body, "TIMELINE", pady=(SP_M, 0), right=(
-            "click a moment to jump there · click the line to scrub"
-            if g.has_timeline else "Riot has no timeline for this game"))
+    def _timeline_panel(self, body):
+        p, self._page["tl_right"] = panel(body, "TIMELINE", pady=(SP_M, 0),
+                                          right="")
         self.tl = TimelineBar(p, self.tooltip, on_pick=self.pick_mark,
                               on_seek=self.seek_cursor)
         self.tl.pack(fill="x")
-        self.tl.set(g.duration_s * 1000, g.moments, self.marks,
-                    self.sel_mark)
         leg = tk.Frame(p, bg=PANEL)
         leg.pack(fill="x", pady=(SP_S, 0))
         for text, col in (("✕ death", BAD), ("▲ missed chance", AMBER),
@@ -1015,6 +1074,14 @@ class App:
         self.tooltip.bind(b1, "Adds a mark where the replay is now (or "
                           "where you last clicked the timeline, if no "
                           "replay is open). Then pick what you missed.")
+
+    def _fill_timeline(self, g: GameView):
+        self._page["tl_right"].configure(text=(
+            "click a moment to jump there · click the line to scrub"
+            if g.has_timeline else "Riot has no timeline for this game"))
+        self.tl.cursor_ms = None
+        self.tl.set(g.duration_s * 1000, g.moments, self.marks,
+                    self.sel_mark)
 
     def seek_cursor(self, ms):
         if self.tl:
@@ -1078,31 +1145,39 @@ class App:
 
     # moments list
     def _render_moments(self):
+        """Moments list. Built once per game; picking/tagging only redraws
+        the canvas (no widgets created or destroyed)."""
         box = getattr(self, "moments_box", None)
         if box is None or not box.winfo_exists():
             return
-        _clear(box)
         n_tag = sum(1 for m in self.marks if m.tagged)
-        W.section_title(box, "MOMENTS", EDGE_HI, right="%d/%d tagged" % (
-            n_tag, len(self.marks)))
+        count = "%d/%d tagged" % (n_tag, len(self.marks))
+        lst = getattr(self, "_moment_list", None)
+        if self.marks and lst is not None and lst.winfo_exists()                 and lst.master is box:
+            self._moments_count.configure(text=count)
+            lst.set(self._moment_rows(), self.sel_mark)
+            return
+        _clear(box)
+        self._moment_list = None
+        self._moments_count = W.section_title(box, "MOMENTS", EDGE_HI,
+                                              right=count)
         if not self.marks:
             tk.Label(box, text="No deaths this game. Add missed chances or "
                      "bookmarks from the timeline.", bg=PANEL, fg=DIM,
                      font=F_SM, wraplength=px(300), justify="left").pack(
                 anchor="w")
             return
+        lst = self._moment_list = MomentList(box, self.pick_mark)
+        lst.pack(fill="x")
+        lst.set(self._moment_rows(), self.sel_mark)
+        nxt = W.button(box, "Next untagged  N", self.next_untagged,
+                       font=F_SM, fg=DIM)
+        nxt.pack(anchor="e", pady=(SP_M, 0))
+
+    def _moment_rows(self) -> list[MomentRow]:
+        rows = []
         for mk in self.marks:
-            sel = mk.id == self.sel_mark
-            bg = HOVER if sel else PANEL
-            r = tk.Frame(box, bg=bg, cursor="hand2")
-            r.pack(fill="x", pady=1)
-            bar = tk.Frame(r, bg=EDGE_HI if sel else bg, width=px(3))
-            bar.pack(side="left", fill="y")
             sym = {DEATH: "✕", MISSED: "▲", BOOKMARK: "■"}[mk.kind]
-            tk.Label(r, text=sym, bg=bg, fg=MARK_COLOR[mk.kind], font=F_SM_B,
-                     width=2).pack(side="left", padx=(px(4), 0))
-            tk.Label(r, text=fmt_time(mk.t_ms / 1000), bg=bg, fg=FG,
-                     font=F_SM, width=6, anchor="w").pack(side="left")
             if mk.kind == DEATH:
                 mo = self._death_moment(mk)
                 lab = mo.label if mo else "Death"
@@ -1111,16 +1186,10 @@ class App:
                                         if mk.note else "")
             cat = category_label(mk.kind, mk.category)
             chip = cat if cat else ("untagged" if mk.kind != BOOKMARK else "")
-            tk.Label(r, text=chip, bg=bg, fg=GOOD if cat else EDGE_HI,
-                     font=F_XS_B if not cat else F_XS).pack(
-                side="right", padx=(px(6), px(6)))
-            tk.Label(r, text=lab, bg=bg, fg=FG if sel else DIM, font=F_SM,
-                     anchor="w").pack(side="left", fill="x", expand=True)
-            for w in (r, *r.winfo_children()):
-                w.bind("<Button-1>", lambda e, i=mk.id: self.pick_mark(i))
-        nxt = W.button(box, "Next untagged  N", self.next_untagged,
-                       font=F_SM, fg=DIM)
-        nxt.pack(anchor="e", pady=(SP_M, 0))
+            rows.append(MomentRow(mk.id, sym, MARK_COLOR[mk.kind],
+                                  fmt_time(mk.t_ms / 1000), lab, chip,
+                                  GOOD if cat else EDGE_HI, not cat))
+        return rows
 
     def _death_moment(self, mk: Mark):
         if self.game is None:
@@ -1142,70 +1211,141 @@ class App:
 
     # tag editor
     def _render_tag(self):
+        """The tag editor for the selected mark. Built once per game page,
+        then only updated: rebuilding its ~30 widgets on every pick took
+        150-250 ms on Windows and made picking moments feel sticky."""
         box = getattr(self, "tag_box", None)
         if box is None or not box.winfo_exists():
             return
         self._flush_note()
-        _clear(box)
+        ed = getattr(self, "_tag_ed", None)
+        if ed is None or ed["box"] is not box or not box.winfo_exists():
+            ed = self._tag_ed = self._build_tag_editor(box)
         mk = self._mark(self.sel_mark) if self.sel_mark else None
         if mk is None:
-            W.section_title(box, "TAG", EDGE_HI)
-            tk.Label(box, text="Pick a moment on the left or on the "
-                     "timeline.", bg=PANEL, fg=DIM, font=F_SM).pack(
-                anchor="w")
+            ed["title"].configure(text="TAG", fg=EDGE_HI)
+            ed["rule"].configure(bg=EDGE_HI)
+            ed["right"].configure(text="")
+            ed["body"].pack_forget()
+            ed["empty"].pack(anchor="w")
+            self._note_widget = None
             return
+        ed["empty"].pack_forget()
+        ed["body"].pack(fill="x")
         color = MARK_COLOR[mk.kind]
-        W.section_title(box, KINDS[mk.kind].upper() + "  ·  " +
-                        fmt_time(mk.t_ms / 1000), color,
-                        right="saved automatically")
-        top = tk.Frame(box, bg=PANEL)
-        top.pack(fill="x")
-        info = tk.Frame(top, bg=PANEL)
-        info.pack(side="left", fill="both", expand=True)
+        ed["title"].configure(text=KINDS[mk.kind].upper() + "  ·  " +
+                              fmt_time(mk.t_ms / 1000), fg=color)
+        ed["rule"].configure(bg=color)
+        ed["right"].configure(text="saved automatically")
         mo = self._death_moment(mk) if mk.kind == DEATH else None
         if mo is not None:
-            tk.Label(info, text=mo.label, bg=PANEL, fg=FG, font=F_SM_B
-                     ).pack(anchor="w")
-            for line in context_lines(mo):
-                tk.Label(info, text="·  " + line, bg=PANEL, fg=DIM,
-                         font=F_SM).pack(anchor="w")
+            ed["head"].configure(text=mo.label, fg=FG, font=F_SM_B,
+                                 wraplength=0)
+            ed["ctx"].configure(text="\n".join(
+                "·  " + line for line in context_lines(mo)))
+            ed["ctx"].pack(anchor="w", after=ed["head"])
         else:
-            tk.Label(info, text="Your mark at %s." % fmt_time(mk.t_ms / 1000)
-                     + (" Pick what you missed below." if mk.kind == MISSED
-                        else ""), bg=PANEL, fg=DIM, font=F_SM,
-                     wraplength=px(320), justify="left").pack(anchor="w")
-        acts = tk.Frame(info, bg=PANEL)
-        acts.pack(anchor="w", pady=(SP_M, 0))
-        W.button(acts, "▶  Jump in replay", lambda: self.jump(mk.t_ms),
-                 gold=True).pack(side="left")
+            ed["head"].configure(
+                text="Your mark at %s." % fmt_time(mk.t_ms / 1000)
+                + (" Pick what you missed below." if mk.kind == MISSED
+                   else ""), fg=DIM, font=F_SM, wraplength=px(320))
+            ed["ctx"].pack_forget()
         if mk.kind != DEATH:
-            W.button(acts, "Delete", lambda: self.delete_mark(mk.id),
-                     font=F_SM, fg=DIM).pack(side="left", padx=(SP_S, 0))
+            ed["delete"].pack(side="left", padx=(SP_S, 0))
+        else:
+            ed["delete"].pack_forget()
         if mo is not None and mo.x is not None:
-            mp = MiniMap(top, self.icons.minimap(), size=140)
-            mp.pack(side="right", anchor="n")
-            mp.mark(mo.x, mo.y)
-        cats = CATEGORIES.get(mk.kind) or []
-        if cats:
-            W.caption(box, "WHY" if mk.kind == DEATH else "WHAT YOU MISSED")
+            ed["map"].pack(side="right", anchor="n")
+            ed["map"].mark(mo.x, mo.y)
+        else:
+            ed["map"].pack_forget()
+        for kind in (DEATH, MISSED):
+            ch = ed["chips"][kind]
+            if kind == mk.kind:
+                ch.set(mk.category)
+                ch.grid()
+            else:
+                ch.grid_remove()
+        if mk.kind in (DEATH, MISSED):
+            ed["why"].configure(text="WHY" if mk.kind == DEATH
+                                else "WHAT YOU MISSED")
+            ed["why"].grid()
+        else:
+            ed["why"].grid_remove()
+        for w in (ed["avoid_cap"], ed["avoid"]):
+            if mk.kind == DEATH:
+                w.grid()
+            else:
+                w.grid_remove()
+        ed["avoid"].set(mk.avoidable)
+        t = ed["note"]
+        t.delete("1.0", "end")
+        t.insert("1.0", mk.note or "")
+        t.edit_reset()                       # no undo into the last mark
+        self._note_widget, self._note_id = t, mk.id
+
+    def _build_tag_editor(self, box) -> dict:
+        _clear(box)
+        ed = {"box": box}
+        row = tk.Frame(box, bg=PANEL)
+        row.pack(fill="x")
+        ed["title"] = tk.Label(row, text="TAG", bg=PANEL, fg=EDGE_HI,
+                               font=F_SM_B)
+        ed["title"].pack(side="left")
+        ed["right"] = tk.Label(row, text="", bg=PANEL, fg=DIM, font=F_XS)
+        ed["right"].pack(side="right")
+        ed["rule"] = tk.Frame(box, bg=EDGE_HI, height=2)
+        ed["rule"].pack(fill="x", pady=(SP_XS, SP_M))
+        ed["empty"] = tk.Label(box, text="Pick a moment on the left or on "
+                               "the timeline.", bg=PANEL, fg=DIM, font=F_SM)
+        body = ed["body"] = tk.Frame(box, bg=PANEL)
+        body.grid_columnconfigure(0, weight=1)
+        top = tk.Frame(body, bg=PANEL)
+        top.grid(row=0, column=0, sticky="ew")
+        info = tk.Frame(top, bg=PANEL)
+        info.pack(side="left", fill="both", expand=True)
+        ed["head"] = tk.Label(info, text="", bg=PANEL, fg=FG, font=F_SM_B,
+                              justify="left")
+        ed["head"].pack(anchor="w")
+        ed["ctx"] = tk.Label(info, text="", bg=PANEL, fg=DIM, font=F_SM,
+                             justify="left")
+        acts = tk.Frame(info, bg=PANEL)
+        acts.pack(anchor="w", side="bottom", pady=(SP_M, 0))
+        W.button(acts, "▶  Jump in replay", lambda: (
+            self._mark(self.sel_mark) and self.jump(
+                self._mark(self.sel_mark).t_ms)), gold=True).pack(side="left")
+        ed["delete"] = W.button(acts, "Delete", lambda: self.sel_mark
+                                and self.delete_mark(self.sel_mark),
+                                font=F_SM, fg=DIM)
+        ed["map"] = MiniMap(top, self.icons.minimap(), size=140)
+
+        def cap(r, text=""):
+            lbl = tk.Label(body, text=text, bg=PANEL, fg=DIM, font=F_XS_B)
+            lbl.grid(row=r, column=0, sticky="w", pady=(SP_L, SP_XS))
+            return lbl
+        ed["why"] = cap(1)
+        ed["chips"] = {}
+        for r, kind in ((2, DEATH), (3, MISSED)):
+            cats = CATEGORIES[kind]
             # full rows: 9 reasons as 3x3, otherwise rows of 4
             cols = 3 if len(cats) % 4 and not len(cats) % 3 else 4
-            Chips(box, cats, mk.category, columns=cols, color=GOOD,
-                  on_change=lambda v, i=mk.id: self._set(i, category=v)
-                  ).pack(fill="x")
-        if mk.kind == DEATH:
-            W.caption(box, "COULD YOU HAVE AVOIDED IT?")
-            Chips(box, AVOIDABLE, mk.avoidable, columns=6, color=EDGE_HI,
-                  active_bg=mix(PANEL2, ACCENT, 0.18),
-                  on_change=lambda v, i=mk.id: self._set(i, avoidable=v)
-                  ).pack(anchor="w")
-        W.caption(box, "NOTE — WHAT SHOULD YOU HAVE DONE?")
-        t = text_box(box, height=3)
-        t.pack(fill="x")
-        t.insert("1.0", mk.note or "")
-        self._note_widget, self._note_id = t, mk.id
+            ch = Chips(body, cats, None, columns=cols, color=GOOD,
+                       on_change=lambda v: self.sel_mark and self._set(
+                           self.sel_mark, category=v))
+            ch.grid(row=r, column=0, sticky="ew")
+            ed["chips"][kind] = ch
+        ed["avoid_cap"] = cap(4, "COULD YOU HAVE AVOIDED IT?")
+        ed["avoid"] = Chips(body, AVOIDABLE, None, columns=6, color=EDGE_HI,
+                            active_bg=mix(PANEL2, ACCENT, 0.18),
+                            on_change=lambda v: self.sel_mark and self._set(
+                                self.sel_mark, avoidable=v))
+        ed["avoid"].grid(row=5, column=0, sticky="w")
+        cap(6, "NOTE — WHAT SHOULD YOU HAVE DONE?")
+        t = ed["note"] = text_box(body, height=3)
+        t.grid(row=7, column=0, sticky="ew")
         t.bind("<KeyRelease>", lambda e: self._queue_note())
         t.bind("<FocusOut>", lambda e: self._flush_note())
+        return ed
 
     def _set(self, mark_id, **fields):
         self.notes.update_mark(mark_id, **fields)
@@ -1255,63 +1395,88 @@ class App:
         self._after_marks_change()
 
     # matchup
-    def _matchup_panel(self, body, g: GameView):
-        mu = self.notes.matchup(g.match_id, g.puuid) or Matchup(
-            g.match_id, g.puuid)
-        lane = [static.champion_name(g.me.champion)]
-        if g.ally_support:
-            lane.append(static.champion_name(g.ally_support.champion))
-        foe = [static.champion_name(x.champion) for x in
-               (g.opponent, g.enemy_support) if x]
-        p, _ = panel(body, "MATCHUP", GOOD, pady=(SP_M, 0), right="%s  vs  %s"
-                     % (" + ".join(lane), " + ".join(foe) or "?"))
+    def _matchup_panel(self, body):
+        pg = self._page
+        p, pg["mu_right"] = panel(body, "MATCHUP", GOOD, pady=(SP_M, 0),
+                                  right="")
         cols = tk.Frame(p, bg=PANEL)
         cols.pack(fill="x")
         cols.grid_columnconfigure(0, weight=3, uniform="m")
         cols.grid_columnconfigure(1, weight=2, uniform="m")
         left = tk.Frame(cols, bg=PANEL)
         left.grid(row=0, column=0, sticky="nsew", padx=(0, SP_L))
-        right = tk.Frame(cols, bg=PANEL)
-        right.grid(row=0, column=1, sticky="nsew")
+        pg["mu_hist"] = tk.Frame(cols, bg=PANEL)
+        pg["mu_hist"].grid(row=0, column=1, sticky="nsew")
 
         def save(**kw):
+            mu = pg.get("mu")
+            if mu is None:
+                return
             for k, v in kw.items():
                 setattr(mu, k, v)
             self.notes.save_matchup(mu)
             if "reviewed" in kw:
                 self._fill_games()
         W.caption(left, "HOW DID THE LANE GO?", pady=(0, SP_XS))
-        Chips(left, LANE_RATING, mu.lane, columns=5,
-              on_change=lambda v: save(lane=v)).pack(fill="x")
+        pg["mu_lane"] = Chips(left, LANE_RATING, None, columns=5,
+                              on_change=lambda v: save(lane=v))
+        pg["mu_lane"].pack(fill="x")
         W.caption(left, "WHAT WORKED, WHAT TO DO NEXT TIME")
-        t = text_box(left, height=4)
+        t = pg["mu_note"] = text_box(left, height=4)
         t.pack(fill="x")
-        t.insert("1.0", mu.note or "")
         job = {"id": None}
 
         def flush():
+            if job["id"]:
+                try:
+                    self.root.after_cancel(job["id"])
+                except tk.TclError:
+                    pass
             job["id"] = None
+            mu = pg.get("mu")
             try:
                 txt = t.get("1.0", "end").strip()
             except tk.TclError:
                 return
-            if txt != (mu.note or ""):
+            if mu is not None and txt != (mu.note or ""):
                 save(note=txt)
 
         def queue(_):
             if job["id"]:
                 self.root.after_cancel(job["id"])
             job["id"] = self.root.after(600, flush)
+        pg["mu_flush"] = flush
         t.bind("<KeyRelease>", queue)
         t.bind("<FocusOut>", lambda e: flush())
         done = tk.Frame(left, bg=PANEL)
         done.pack(anchor="w", pady=(SP_M, 0))
-        rv = Chips(done, [(True, "✓  Game reviewed")], True if mu.reviewed
-                   else None, columns=1, color=GOOD,
-                   on_change=lambda v: save(reviewed=bool(v)))
-        rv.pack(side="left")
+        pg["mu_rev"] = Chips(done, [(True, "✓  Game reviewed")], None,
+                             columns=1, color=GOOD,
+                             on_change=lambda v: save(reviewed=bool(v)))
+        pg["mu_rev"].pack(side="left")
 
-        # earlier notes against this opponent
+    def _fill_matchup(self, g: GameView):
+        pg = self._page
+        if pg.get("mu") is not None:
+            pg["mu_flush"]()              # a note typed for the last game
+        mu = pg["mu"] = self.notes.matchup(g.match_id, g.puuid) or Matchup(
+            g.match_id, g.puuid)
+        lane = [static.champion_name(g.me.champion)]
+        if g.ally_support:
+            lane.append(static.champion_name(g.ally_support.champion))
+        foe = [static.champion_name(x.champion) for x in
+               (g.opponent, g.enemy_support) if x]
+        pg["mu_right"].configure(text="%s  vs  %s" % (
+            " + ".join(lane), " + ".join(foe) or "?"))
+        pg["mu_lane"].set(mu.lane)
+        t = pg["mu_note"]
+        t.delete("1.0", "end")
+        t.insert("1.0", mu.note or "")
+        t.edit_reset()
+        pg["mu_rev"].set(True if mu.reviewed else None)
+        # earlier notes against this opponent: small and varies, rebuilt
+        right = pg["mu_hist"]
+        _clear(right)
         opp = g.opponent.champion if g.opponent else None
         hist = self.notes.matchup_history(None, opp, exclude_match=g.match_id,
                                           puuids=[g.puuid]) if opp else []

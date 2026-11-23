@@ -382,6 +382,7 @@ def test_ui(ui, server):
     _ui_with_replay_open(*ui, server)
     _ui_keep_on_me(*ui, server)
     _ui_hide_games(*ui)
+    _ui_page_reuse(*ui)
 
 
 def _ui_flow(a, errors):
@@ -624,3 +625,24 @@ def _ui_hide_games(a, errors):
     # wide again: docked list is back
     size(1320)
     assert a._docked and a._dock_p == 1.0 and settle() and not errors
+
+
+def _ui_page_reuse(a, errors):
+    """Switching games refills the same page instead of rebuilding it, and
+    a matchup note typed just before the switch is still saved."""
+    a.navigate("review")
+    assert _pump(a, 4, lambda: a.game is not None and a._page is not None)
+    body, tl, lst = a.right.body, a.tl, a._moment_list
+    t = a._page["mu_note"]
+    t.delete("1.0", "end")
+    t.insert("1.0", "freeze lane at 3 waves")   # no KeyRelease: not saved
+    a.open_game(a.game.match_id)
+    assert _pump(a, 4, lambda: a.notes.matchup(
+        a.game.match_id, a.game.puuid).note == "freeze lane at 3 waves")
+    _pump(a, 0.3)
+    assert a.right.body is body and a.tl is tl and a._moment_list is lst
+    # picking a moment only redraws: the tag editor is the same widgets
+    ed = a._tag_ed
+    a.pick_mark(a.marks[1].id)
+    a.pick_mark(a.marks[0].id)
+    assert a._tag_ed is ed and a._note_id == a.marks[0].id and not errors

@@ -437,3 +437,120 @@ class TimelineBar(tk.Canvas):
             self.tooltip.show(*spec)
         else:
             self.tooltip.hide()
+
+
+class MomentList(tk.Canvas):
+    """The Moments list drawn on one canvas (like REVIEW's Table): a row
+    per mark with symbol, time, label and tag. It used to be ~6 widgets a
+    row; on Windows each one is a native window, and building, laying out
+    and destroying ~90 of them made every game switch stall for ~200 ms.
+
+    ``set(rows, selected)``; rows are ``MomentRow``s. Click -> on_pick(id).
+    """
+
+    def __init__(self, master, on_pick: Callable[[Any], None], bg=PANEL):
+        from tkinter import font as tkfont
+        super().__init__(master, bg=bg, highlightthickness=0, height=1,
+                         cursor="hand2")
+        self.on_pick, self.bg = on_pick, bg
+        self.rows: list = []
+        self.selected = None
+        self.row_h = px(26)
+        self._f = tkfont.Font(font=F_SM)
+        self._f_chip = tkfont.Font(font=F_XS)
+        self._f_chip_b = tkfont.Font(font=F_XS_B)
+        self._hover = -1
+        self._drawn_w = None
+        self.bind("<Configure>", lambda e: e.width != self._drawn_w
+                  and self.redraw())
+        self.bind("<Motion>", lambda e: self._set_hover(self._row(e.y)))
+        self.bind("<Leave>", lambda e: self._set_hover(-1))
+        self.bind("<Button-1>", self._click)
+
+    def set(self, rows, selected=None):
+        self.rows, self.selected = rows, selected
+        self.configure(height=max(len(rows), 1) * self.row_h)
+        self.redraw()
+
+    def select(self, key):
+        self.selected = key
+        self.redraw()
+
+    def _row(self, y) -> int:
+        i = int(y // self.row_h)
+        return i if 0 <= i < len(self.rows) else -1
+
+    def _fit(self, font, text: str, avail: float) -> str:
+        if font.measure(text) <= avail:
+            return text
+        lo, hi = 0, len(text)
+        while lo < hi:
+            mid = (lo + hi + 1) // 2
+            if font.measure(text[:mid].rstrip() + "…") <= avail:
+                lo = mid
+            else:
+                hi = mid - 1
+        return text[:lo].rstrip() + "…" if lo else ""
+
+    def _row_bg(self, i) -> str:
+        if self.rows[i].key == self.selected:
+            return HOVER
+        return mix(PANEL, HOVER, 0.45) if i == self._hover else self.bg
+
+    def redraw(self):
+        self.delete("all")
+        w = self.winfo_width()
+        if w <= 1:
+            return
+        self._drawn_w = w
+        rh, f = self.row_h, self._f
+        chw = f.measure("0")
+        x_sym, x_time = px(4) + chw, px(4) + 2 * chw + px(4)
+        x_lab = x_time + 6 * chw + px(4)
+        for i, r in enumerate(self.rows):
+            y0, cy = i * rh, i * rh + rh / 2
+            sel = r.key == self.selected
+            self.create_rectangle(0, y0 + 1, w, y0 + rh - 1,
+                                  fill=self._row_bg(i), width=0,
+                                  tags=("bg", "bg%d" % i))
+            if sel:
+                self.create_rectangle(0, y0 + 1, px(3), y0 + rh - 1,
+                                      fill=EDGE_HI, width=0)
+            self.create_text(x_sym, cy, text=r.sym, fill=r.sym_color,
+                             font=F_SM_B)
+            self.create_text(x_time, cy, text=r.time, fill=FG, font=F_SM,
+                             anchor="w")
+            chip_w = 0
+            if r.chip:
+                cf = self._f_chip_b if r.chip_bold else self._f_chip
+                chip_w = cf.measure(r.chip)
+                self.create_text(w - px(6), cy, text=r.chip,
+                                 fill=r.chip_color, anchor="e",
+                                 font=F_XS_B if r.chip_bold else F_XS)
+            avail = w - px(6) - chip_w - px(10) - x_lab
+            self.create_text(x_lab, cy, text=self._fit(f, r.label, avail),
+                             fill=FG if sel else DIM, font=F_SM, anchor="w")
+
+    def _set_hover(self, i):
+        if i == self._hover:
+            return
+        old, self._hover = self._hover, i
+        for j in (old, i):
+            if 0 <= j < len(self.rows):
+                self.itemconfigure("bg%d" % j, fill=self._row_bg(j))
+
+    def _click(self, e):
+        i = self._row(e.y)
+        if i >= 0 and self.on_pick:
+            self.on_pick(self.rows[i].key)
+
+
+class MomentRow:
+    __slots__ = ("key", "sym", "sym_color", "time", "label", "chip",
+                 "chip_color", "chip_bold")
+
+    def __init__(self, key, sym, sym_color, time, label, chip, chip_color,
+                 chip_bold):
+        self.key, self.sym, self.sym_color, self.time = key, sym, sym_color, time
+        self.label, self.chip = label, chip
+        self.chip_color, self.chip_bold = chip_color, chip_bold

@@ -463,6 +463,23 @@ class ScrollArea(tk.Frame):
     def to_top(self):
         self.canvas.yview_moveto(0)
 
+    def fresh_body(self) -> tk.Frame:
+        """A new, not yet shown body to build a page into (see swap_body)."""
+        return tk.Frame(self.canvas, bg=self.canvas["bg"])
+
+    def swap_body(self, new: tk.Frame) -> tk.Frame:
+        """Show ``new`` in place of the current body, in one step, keeping
+        the scroll position. Returns the old body (hidden, not destroyed)."""
+        old, old_win = self.body, self._win
+        self.body = new
+        self._win = self.canvas.create_window(
+            0, 0, window=new, anchor="nw",
+            width=max(self.canvas.winfo_width(), 1))
+        new.bind("<Configure>", lambda e: self.canvas.configure(
+            scrollregion=(0, 0, e.width, e.height)))
+        self.canvas.delete(old_win)
+        return old
+
 
 def install_wheel(root) -> None:
     """Smooth wheel scrolling for whatever scrollable canvas is under the
