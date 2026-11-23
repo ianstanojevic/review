@@ -596,9 +596,12 @@ def _ui_hide_games(a, errors):
     a.toggle_games()
     a.root.update()
     assert not (a.games_left.winfo_manager() == "pack") and a.prefs.get("games_hidden")
+    from review.theme.widgets import px
+    assert a.root.minsize()[0] == px(a.MIN_W_NARROW)   # can shrink now
     a.navigate("review")              # remembered when the view is rebuilt
     a.root.update()
     assert not (a.games_left.winfo_manager() == "pack") and "Show" in a.side_btn["text"]
     a.toggle_games()
     a.root.update()
     assert (a.games_left.winfo_manager() == "pack") and not errors
+    assert a.root.minsize()[0] == px(a.MIN_W)

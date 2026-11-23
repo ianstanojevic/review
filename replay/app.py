@@ -187,7 +187,7 @@ class App:
         self.root.after(30, self._drain)
         root.geometry(window.safe_geometry(
             root, self.prefs.get("geometry"), (1320, 900)))
-        root.minsize(px(1080), px(680))
+        self._apply_minsize()
         root.protocol("WM_DELETE_WINDOW", self.close)
         # stop the repeating timers once the window is gone (otherwise they
         # keep re-arming on the dead Tcl interpreter)
@@ -235,10 +235,11 @@ class App:
             bottom, text="Space play/pause · ←/→ 10 s · N next untagged · "
             "M missed chance · B bookmark · F follow me · G games list",
             bg=DARK_BG,
-            fg=mix(DIM, DARK_BG, 0.35), font=F_XS)
-        self.keys_lbl.pack(side="left", anchor="s")
+            fg=mix(DIM, DARK_BG, 0.35), font=F_XS, anchor="w")
         self.status = tk.Label(bottom, text="", bg=DARK_BG, fg=DIM, font=F_SM)
-        self.status.pack(side="right", anchor="s")
+        # status first: in a narrow window the key hints get cut, not it
+        self.status.pack(side="right", anchor="s", padx=(SP_M, 0))
+        self.keys_lbl.pack(side="left", anchor="s", fill="x", expand=True)
         self.navigate("review")
 
     def set_status(self, text, color=DIM):
@@ -288,7 +289,17 @@ class App:
             self.side_btn.pack(side="left", padx=(SP_L, 0))
         else:
             self.side_btn.pack_forget()
+        self._apply_minsize()
         getattr(self, "_view_" + name)()
+
+    MIN_W, MIN_W_NARROW, MIN_H = 1080, 660, 680
+
+    def _apply_minsize(self):
+        """Without the games list the review view fits a much narrower
+        window (e.g. next to the game); the other views need the width."""
+        narrow = self.view == "review" and self._games_hidden()
+        self.root.minsize(px(self.MIN_W_NARROW if narrow else self.MIN_W),
+                          px(self.MIN_H))
 
     def _games_hidden(self) -> bool:
         return bool(self.prefs.get("games_hidden", False))
@@ -302,6 +313,7 @@ class App:
         hide = not self._games_hidden()
         self.prefs.set("games_hidden", hide)
         self._side_label()
+        self._apply_minsize()
         left = getattr(self, "games_left", None)
         if self.view != "review" or left is None or not left.winfo_exists():
             return
