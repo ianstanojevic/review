@@ -18,6 +18,7 @@ ACCENT_HI = "#e2ca92"  # lighter gold — hover glow on gold buttons
 BTN_FG = "#0a1428"     # dark text on gold button
 GOOD = "#0ac8b9"       # hextech teal
 BAD = "#e84057"        # league red
+WIN = "#5383e8"        # victory blue (match history W)
 HOVER = "#16273e"      # highlighted row on mouse-over
 ROW_ALT = "#0b1626"    # zebra row
 TOP_BG = "#13233a"     # highlighted #1 row

@@ -32,7 +32,7 @@ from review.theme import window
 from review.theme.tokens import (ACCENT, BAD, BORDER, DARK_BG, DIM, EDGE,
                                  EDGE_HI, F_LG_B, F_MD, F_SM, F_SM_B, F_XS,
                                  F_XS_B, FG, GOOD, HOVER, PANEL, PANEL2,
-                                 SP_L, SP_M, SP_S, SP_XS, TEAL_BG, mix)
+                                 SP_L, SP_M, SP_S, SP_XS, TEAL_BG, WIN, mix)
 from review.theme.widgets import px
 from review.ui.assets import IconStore
 
@@ -138,14 +138,14 @@ def result_cell(g) -> tuple[str, str]:
     """Games-list result: W / L, or a grey R for a remake."""
     if g.remake:
         return "R", DIM
-    return ("W", GOOD) if g.win else ("L", BAD)
+    return ("W", WIN) if g.win else ("L", BAD)
 
 
 def result_text(g) -> tuple[str, str]:
     """Game header: Victory / Defeat, or Remake in grey."""
     if g.remake:
         return "Remake", DIM
-    return ("Victory", GOOD) if g.win else ("Defeat", BAD)
+    return ("Victory", WIN) if g.win else ("Defeat", BAD)
 
 
 class App:
