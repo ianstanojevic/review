@@ -91,6 +91,22 @@ source, then checked on Ian's PC with the client and a real replay open:
    twice in a row (`follow_after_seek`), and while it's on the 1 s poll
    brings the camera back when you're alive and off screen two polls in a
    row (`screenPositionCenter` is 3.4e38 off screen). Off = camera is yours.
+   **2026-11-23, live:** the replay HUD's camera menu (bottom left in
+   League) matters and is not in the API. On **Directed Camera** (the
+   game puts it back after a jump) the game steers the camera to the
+   action: after a seek it may be in `fps` mode, where a lock sends the
+   camera off the map, and it pulls the camera away again within ~1 s of
+   a lock. Now: `follow()` puts `cameraMode` back to `top` first;
+   `follow_after_seek` checks and re-locks up to 3 times; the poll re-locks
+   after 2 off-screen polls and 3 s; after 4 re-locks in 40 s the status
+   line says to set the menu to Manual Camera. The ◎ button / F always
+   lock (they used to toggle, so a click while on switched it off); off is
+   in Settings. Still seen: at some times the game keeps `selectionName`
+   but doesn't move the camera at all (`cameraPosition` unchanged) — a
+   double-click on your portrait in League works then. While League is
+   recording (`/replay/recording`) the camera can't be moved at all.
+   Sequences (`/replay/sequence` with a `selectionName` track) switch the
+   camera to `fps`: not usable for following.
 4. **Look** — ✅ at 200 %: banner, tab row, panels and status line are
    pixel-identical to REVIEW; tab row and first panel sit on the same pixel
    rows as DRAFT. `--snapshot` captures with PrintWindow off-screen on

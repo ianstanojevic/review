@@ -513,8 +513,10 @@ class App:
                      fg=GOOD if on else (FG if live else off),
                      bg=TEAL_BG if on else PANEL2, font=F_SM)
         b.pack(side="left", padx=(0, px(3)))
-        self.tooltip.bind(b, "On: the camera stays on you after every jump "
-                          "and comes back if it wanders off (F)")
+        self.tooltip.bind(b, "Locks the camera on you and keeps it there "
+                          "after every jump (F). If it keeps drifting off: "
+                          "set the replay's camera menu (bottom left in "
+                          "League) to Manual Camera.")
         sp = W.TabRow(ctl, None, SPEEDS, float(self.prefs.get("speed", 1.0)),
                       on_change=self.set_speed, style="teal", bg=PANEL,
                       small=True)
@@ -826,13 +828,12 @@ class App:
         self._replay_call(lambda: self.rapi.set_playback(speed=v), quiet=True)
 
     def follow_me(self):
-        on = not self._follow_on()
-        self.prefs.set("follow", on)
+        """◎ / F: lock the camera on me now and keep it there (see
+        REPLAY's follow_me: it no longer toggles off)."""
+        if not self._follow_on():
+            self.prefs.set("follow", True)
+            self._render_remote()
         self._offscreen = 0
-        self._render_remote()
-        if not on:
-            self.set_status("Camera is yours — Follow me is off", DIM)
-            return
         me = self._me()
         if me:
             self._replay_call(lambda: self.rapi.follow(*me), quiet=True)

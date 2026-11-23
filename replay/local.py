@@ -291,6 +291,12 @@ class ReplayAPI:
         names first, compared without spaces/punctuation."""
         try:
             r = self.render()
+            # After a jump with the replay's "Directed Camera" on, the game
+            # puts the camera in first-person ("fps"); a lock there sends
+            # it off the map (live, 16.23). The normal top-down camera
+            # follows the selection.
+            if r.get("cameraMode") not in (None, "top"):
+                self.set_render(cameraMode="top")
         except LocalError:
             return "failed"
         if "selectionName" in r:
@@ -355,13 +361,28 @@ class ReplayAPI:
             return None
         return _visible(p.get("screenPositionCenter"))
 
-    def follow_after_seek(self, champion: str, riot_name: str = "") -> str:
+    def follow_after_seek(self, champion: str, riot_name: str = "",
+                          retries: int = 3) -> str:
         """Lock once the seek has finished — once. The camera then PANS to
         you (live: 3-8 s from far away); locking again during the pan
         restarts it, so callers must leave it alone for a while."""
         self.wait_seek()
         time.sleep(0.3)
-        return self.follow(champion, riot_name)
+        r = self.follow(champion, riot_name)
+        # Live (16.23): a jump puts the replay back on "Directed Camera",
+        # which often takes the camera away again within a second of the
+        # first lock; a second lock then holds. Check and retry a little.
+        for _ in range(retries):
+            if r != "locked":
+                break
+            time.sleep(0.8)
+            try:
+                if self.on_screen(champion, riot_name) is not False:
+                    break
+            except LocalError:
+                break
+            r = self.follow(champion, riot_name)
+        return r
 
 def _norm(name) -> str:
     """'Miss Fortune' / 'MissFortune' / "Kai'Sa" -> 'missfortune' / 'kaisa'."""

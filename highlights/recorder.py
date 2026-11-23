@@ -237,7 +237,8 @@ class Recorder:
         rapi.set_playback(time=max(c.start_s - PREROLL_S, 0), paused=False,
                           speed=1.0)
         prog(Progress("camera", i, n, 0, c.title))
-        rapi.follow_after_seek(*me)
+        # one lock, no re-checks: the clip's timing is planned around it
+        rapi.follow_after_seek(*me, retries=0)
         # let it play (the camera pans to you) up to the clip's start
         while rapi.playback().get("time", c.start_s) < c.start_s - 0.1:
             _wait(self.cancel, 0.05)

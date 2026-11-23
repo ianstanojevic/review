@@ -148,6 +148,10 @@ def result_text(g) -> tuple[str, str]:
     return ("Victory", WIN) if g.win else ("Defeat", BAD)
 
 
+DIRECTED_HINT = ("The camera keeps leaving you: in League, set the "
+                 "replay's camera menu (bottom left) to Manual Camera")
+
+
 class App:
     def __init__(self, demo: bool = False):
         self.root = root = W.make_root("Replay")
@@ -234,7 +238,7 @@ class App:
         bottom.pack(fill="x", side="bottom", pady=(SP_M, 0))
         self.keys_lbl = tk.Label(
             bottom, text="Space play/pause · ←/→ 10 s · N next untagged · "
-            "M missed chance · B bookmark · F follow me · G games list",
+            "M missed chance · B bookmark · F camera on me · G games list",
             bg=DARK_BG,
             fg=mix(DIM, DARK_BG, 0.35), font=F_XS, anchor="w")
         self.status = tk.Label(bottom, text="", bg=DARK_BG, fg=DIM, font=F_SM)
@@ -848,9 +852,11 @@ class App:
                      fg=GOOD if on else (FG if live else mix(DIM, PANEL, 0.3)),
                      bg=TEAL_BG if on else PANEL2, font=F_SM)
         b.pack(side="left", padx=(0, px(3)))
-        self.tooltip.bind(b, "On: the camera stays on you — after every "
-                          "jump, and brought back if it wanders off. "
-                          "Off: the camera is yours (F)")
+        self.tooltip.bind(b, "Locks the camera on you and keeps it there "
+                          "after every jump (F). If it keeps drifting off: "
+                          "set the replay's camera menu (bottom left in "
+                          "League) to Manual Camera. Turn it off in "
+                          "Settings.")
         speed = float(self.prefs.get("speed", 0.5))
         sp = W.TabRow(ctl, None, SPEEDS, speed, on_change=self.set_speed,
                       style="teal", bg=PANEL, small=True)
@@ -994,21 +1000,23 @@ class App:
         self._replay_call(lambda: self.rapi.set_playback(speed=v), quiet=True)
 
     def follow_me(self):
-        """Toggle "camera stays on me". Turning it on locks right away."""
+        """The ◎ button / F: lock the camera on me now, and keep it there
+        (Follow me on). It used to toggle, so a click while it was on
+        switched it off and looked like "the button does nothing"; turning
+        it off is in Settings."""
         g = self.game
         if g is None:
             return
-        on = not self._follow_on()
-        self.prefs.set("follow", on)
+        if not self._follow_on():
+            self.prefs.set("follow", True)
+            self._render_remote()
         self._offscreen = 0
-        self._render_remote()
-        if not on:
-            self.set_status("Camera is yours — Follow me is off", DIM)
-            return
+        self._relocks = []
 
         def go():
             r = self.rapi.follow(g.me.champion, g.me.riot_id.split("#")[0])
-            msg = {"locked": ("Camera locked on %s" % g.me.champion, GOOD),
+            msg = {"locked": ("Camera locked on %s — it stays on you "
+                              "after jumps" % g.me.champion, GOOD),
                    "attached": ("Camera follows the selected unit — click "
                                 "%s once in the replay" % g.me.champion,
                                 EDGE_HI),
@@ -1053,15 +1061,23 @@ class App:
     def _keep_on_me(self, me):
         """Worker thread, once a second while Follow me is on: if you're
         alive and off screen twice in a row (single off-screen frames
-        happen while following), lock the camera on you again."""
+        happen while following), lock the camera on you again. Live
+        (16.23, Manual Camera) the camera jumps to you at once; with the
+        replay's "Directed Camera" on, the game keeps pulling it away to
+        the action, so after a few re-locks in a short time say so."""
         try:
             vis = self.rapi.on_screen(*me)
             self._offscreen = self._offscreen + 1 if vis is False else 0
-            # the camera pans to you after a lock (up to ~8 s); re-locking
-            # during the pan restarts it, so wait before trying again
-            if self._offscreen >= 3 and                     time.monotonic() - self.rapi.last_lock > 9:
+            if self._offscreen >= 2 and \
+                    time.monotonic() - self.rapi.last_lock > 3:
                 self._offscreen = 0
                 self.rapi.follow(*me)
+                now = time.monotonic()
+                self._relocks = [t for t in getattr(self, "_relocks", [])
+                                 if now - t < 40] + [now]
+                if len(self._relocks) >= 4:
+                    self._relocks = []
+                    self.post(self.set_status, DIRECTED_HINT, EDGE_HI)
         except local.LocalError:
             self._offscreen = 0
 
@@ -1775,8 +1791,8 @@ class App:
             anchor="w")
         fol = tk.BooleanVar(value=bool(self.prefs.get("follow", True)))
         W.caption(body, "CAMERA")
-        tk.Checkbutton(body, text="Follow me: keep the camera on me (also "
-                       "the ◎ button, F)",
+        tk.Checkbutton(body, text="Follow me: keep the camera on me "
+                       "after jumps (the ◎ button / F lock it now)",
                        variable=fol, bg=PANEL, fg=FG, selectcolor=PANEL2,
                        activebackground=PANEL, activeforeground=FG,
                        font=F_SM).pack(anchor="w")
