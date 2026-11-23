@@ -148,8 +148,7 @@ def result_text(g) -> tuple[str, str]:
     return ("Victory", WIN) if g.win else ("Defeat", BAD)
 
 
-DIRECTED_HINT = ("The camera keeps leaving you: in League, set the "
-                 "replay's camera menu (bottom left) to Manual Camera")
+LOCK_HINT = "double-click your portrait in League to lock the camera on you"
 
 
 class App:
@@ -187,7 +186,6 @@ class App:
         self._save_job = None
         self._inbox: queue.Queue = queue.Queue()
         self._alive = True                     # False once root is destroyed
-        self._offscreen = 0                    # polls with you off screen
         self._build()
         self.root.after(30, self._drain)
         root.geometry(window.safe_geometry(
@@ -238,7 +236,7 @@ class App:
         bottom.pack(fill="x", side="bottom", pady=(SP_M, 0))
         self.keys_lbl = tk.Label(
             bottom, text="Space play/pause · ←/→ 10 s · N next untagged · "
-            "M missed chance · B bookmark · F camera on me · G games list",
+            "M missed chance · B bookmark · G games list",
             bg=DARK_BG,
             fg=mix(DIM, DARK_BG, 0.35), font=F_XS, anchor="w")
         self.status = tk.Label(bottom, text="", bg=DARK_BG, fg=DIM, font=F_SM)
@@ -847,16 +845,6 @@ class App:
                          font=F_SM)
             b.pack(side="left", padx=(0, px(3)))
             self.tooltip.bind(b, tip)
-        on = self._follow_on()
-        b = W.button(ctl, "◎ Follow me", self.follow_me,
-                     fg=GOOD if on else (FG if live else mix(DIM, PANEL, 0.3)),
-                     bg=TEAL_BG if on else PANEL2, font=F_SM)
-        b.pack(side="left", padx=(0, px(3)))
-        self.tooltip.bind(b, "Locks the camera on you and keeps it there "
-                          "after every jump (F). If it keeps drifting off: "
-                          "set the replay's camera menu (bottom left in "
-                          "League) to Manual Camera. Turn it off in "
-                          "Settings.")
         speed = float(self.prefs.get("speed", 0.5))
         sp = W.TabRow(ctl, None, SPEEDS, speed, on_change=self.set_speed,
                       style="teal", bg=PANEL, small=True)
@@ -866,11 +854,7 @@ class App:
 
     def _remote_key(self):
         pb = self.playback
-        return (pb is not None, bool(pb and pb.get("paused")),
-                self._follow_on())
-
-    def _follow_on(self) -> bool:
-        return bool(self.prefs.get("follow", True))
+        return (pb is not None, bool(pb and pb.get("paused")))
 
     def _me(self):
         g = self.game
@@ -967,26 +951,23 @@ class App:
         offset = float(self.prefs.get("offset_s", 0))
         speed = float(self.prefs.get("speed", 0.5))
         target = max(t_ms / 1000 - lead + offset, 0)
-        me = self._me() if self._follow_on() else None
 
         def go():
             self.rapi.set_playback(time=target, paused=False, speed=speed)
-            if me:      # a seek clears the lock: lock once it's done
-                self.rapi.follow_after_seek(*me)
         self._replay_call(go)
-        self.set_status("Jumped to %s (%d s before)" % (fmt_time(
-            t_ms / 1000), lead))
+        # A jump drops League's camera lock, and the game doesn't reliably
+        # let another program lock it again (live, 16.23: the lock is often
+        # ignored, and Vanguard blocks simulated clicks). The double-click
+        # on your portrait always works, so say that instead.
+        self.set_status("Jumped to %s (%d s before) · %s" % (fmt_time(
+            t_ms / 1000), lead, LOCK_HINT), EDGE_HI)
         if self.tl:
             self.tl.set_cursor(t_ms)
 
     def nudge(self, s):
-        me = self._me() if self._follow_on() else None
-
         def go():
             pb = self.rapi.playback()
             self.rapi.set_playback(time=pb.get("time", 0) + s)
-            if me:
-                self.rapi.follow_after_seek(*me)
         self._replay_call(go)
 
     def toggle_pause(self):
@@ -999,44 +980,14 @@ class App:
         self.prefs.set("speed", v)
         self._replay_call(lambda: self.rapi.set_playback(speed=v), quiet=True)
 
-    def follow_me(self):
-        """The ◎ button / F: lock the camera on me now, and keep it there
-        (Follow me on). It used to toggle, so a click while it was on
-        switched it off and looked like "the button does nothing"; turning
-        it off is in Settings."""
-        g = self.game
-        if g is None:
-            return
-        if not self._follow_on():
-            self.prefs.set("follow", True)
-            self._render_remote()
-        self._offscreen = 0
-        self._relocks = []
-
-        def go():
-            r = self.rapi.follow(g.me.champion, g.me.riot_id.split("#")[0])
-            msg = {"locked": ("Camera locked on %s — it stays on you "
-                              "after jumps" % g.me.champion, GOOD),
-                   "attached": ("Camera follows the selected unit — click "
-                                "%s once in the replay" % g.me.champion,
-                                EDGE_HI),
-                   "failed": ("No replay open — press Watch first",
-                              EDGE_HI)}[r]
-            self.post(lambda: self.set_status(*msg))
-        self._replay_call(go)
-
     def _poll_local(self):
         """Every second: is the client up, is a replay open, where is it."""
-        me = self._me() if self._follow_on() else None
-
         def work():
             ok = self.lcu.running()
             try:
                 pb = self.rapi.playback()
             except local.LocalError:
                 pb = None
-            if pb is not None and me and not pb.get("seeking"):
-                self._keep_on_me(me)
             self.post(done, ok, pb)
 
         def done(ok, pb):
@@ -1057,29 +1008,6 @@ class App:
             if self._alive:
                 self.root.after(1000, self._poll_local)
         threading.Thread(target=work, daemon=True).start()
-
-    def _keep_on_me(self, me):
-        """Worker thread, once a second while Follow me is on: if you're
-        alive and off screen twice in a row (single off-screen frames
-        happen while following), lock the camera on you again. Live
-        (16.23, Manual Camera) the camera jumps to you at once; with the
-        replay's "Directed Camera" on, the game keeps pulling it away to
-        the action, so after a few re-locks in a short time say so."""
-        try:
-            vis = self.rapi.on_screen(*me)
-            self._offscreen = self._offscreen + 1 if vis is False else 0
-            if self._offscreen >= 2 and \
-                    time.monotonic() - self.rapi.last_lock > 3:
-                self._offscreen = 0
-                self.rapi.follow(*me)
-                now = time.monotonic()
-                self._relocks = [t for t in getattr(self, "_relocks", [])
-                                 if now - t < 40] + [now]
-                if len(self._relocks) >= 4:
-                    self._relocks = []
-                    self.post(self.set_status, DIRECTED_HINT, EDGE_HI)
-        except local.LocalError:
-            self._offscreen = 0
 
     # timeline
     def _timeline_panel(self, body):
@@ -1743,8 +1671,6 @@ class App:
             r.bind("<%s>" % k, guard(lambda: self.add_mark(MISSED)))
         for k in ("b", "B"):
             r.bind("<%s>" % k, guard(lambda: self.add_mark(BOOKMARK)))
-        for k in ("f", "F"):
-            r.bind("<%s>" % k, guard(self.follow_me))
         for k in ("g", "G"):
             r.bind("<%s>" % k, guard(self.toggle_games))
         r.bind("<Escape>", guard(self.close_games_overlay))
@@ -1789,14 +1715,6 @@ class App:
                              "folder"}[en],
                  bg=PANEL, fg=GOOD if en else EDGE_HI, font=F_SM).pack(
             anchor="w")
-        fol = tk.BooleanVar(value=bool(self.prefs.get("follow", True)))
-        W.caption(body, "CAMERA")
-        tk.Checkbutton(body, text="Follow me: keep the camera on me "
-                       "after jumps (the ◎ button / F lock it now)",
-                       variable=fol, bg=PANEL, fg=FG, selectcolor=PANEL2,
-                       activebackground=PANEL, activeforeground=FG,
-                       font=F_SM).pack(anchor="w")
-
         def save():
             for k, (e, typ) in fields.items():
                 v = e.get().strip()
@@ -1804,7 +1722,6 @@ class App:
                     self.prefs.set(k, typ(v) if typ is not str else v)
                 except ValueError:
                     pass
-            self.prefs.set("follow", bool(fol.get()))
             self.install = local.install_dir(self.prefs.get("league_dir"))
             self.lcu = local.LeagueClient(self.install)
             d.destroy()

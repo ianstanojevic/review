@@ -3,7 +3,7 @@
 Works like an editing program: you watch the replay in League (borderless
 window above or beside this one), and here you get
 
-* the remote: ⟲10 · play/pause · 10⟳ · speed · Follow me (camera on you),
+* the remote: ⟲10 · play/pause · 10⟳ · speed,
 * a timeline of the whole game — kills, highlight blocks (length = clip,
   brightness = score), objectives — with a playhead that follows the
   replay; click a block to jump there, drag its edges to trim it, or set
@@ -57,7 +57,7 @@ from .timeline import MIN_CLIP_MS, ClipTimeline, Span
 VIEWS = [("editor", "Editor"), ("clips", "Clips")]
 SPEEDS = [(0.5, "0.5×"), (1.0, "1×"), (2.0, "2×")]
 KEYS = ("Space play/pause · ←/→ 10 s · N/P next/previous clip · I/O in/out "
-        "at the playhead · Enter preview · S save · F follow me")
+        "at the playhead · Enter preview · S save")
 LEGAL = ("HIGHLIGHTS isn't endorsed by Riot Games and doesn't reflect the "
          "views or opinions of Riot Games or anyone officially involved in "
          "producing or managing Riot Games properties.")
@@ -99,7 +99,6 @@ class App:
     _known_players = _Replay._known_players
     post = _Replay.post
     _drain = _Replay._drain
-    _keep_on_me = _Replay._keep_on_me
 
     def __init__(self, demo: bool = False):
         import queue
@@ -145,7 +144,6 @@ class App:
         self.tl: ClipTimeline | None = None
         self._inbox: queue.Queue = queue.Queue()
         self._alive = True
-        self._offscreen = 0
         self._polls = 0
         self._build()
         self.root.after(30, self._drain)
@@ -508,15 +506,6 @@ class App:
             b = W.button(ctl, text, cmd, fg=FG if live else off, font=F_SM)
             b.pack(side="left", padx=(0, px(3)))
             self.tooltip.bind(b, tip)
-        on = self._follow_on()
-        b = W.button(ctl, "◎ Follow me", self.follow_me,
-                     fg=GOOD if on else (FG if live else off),
-                     bg=TEAL_BG if on else PANEL2, font=F_SM)
-        b.pack(side="left", padx=(0, px(3)))
-        self.tooltip.bind(b, "Locks the camera on you and keeps it there "
-                          "after every jump (F). If it keeps drifting off: "
-                          "set the replay's camera menu (bottom left in "
-                          "League) to Manual Camera.")
         sp = W.TabRow(ctl, None, SPEEDS, float(self.prefs.get("speed", 1.0)),
                       on_change=self.set_speed, style="teal", bg=PANEL,
                       small=True)
@@ -525,11 +514,8 @@ class App:
     def _remote_key(self):
         pb = self.playback
         return (pb is not None, bool(pb and pb.get("paused")),
-                self._follow_on(), self.this_open, self.opening,
+                self.this_open, self.opening,
                 self.client_ok)
-
-    def _follow_on(self) -> bool:
-        return bool(self.prefs.get("follow", True))
 
     def _me(self):
         g = self.game
@@ -782,14 +768,11 @@ class App:
     def jump(self, ms: float, speed: float | None = None):
         sp = float(speed if speed is not None else self.prefs.get("speed",
                                                                   1.0))
-        me = self._me() if self._follow_on() else None
         self.preview_out = None
 
         def go():
             self.rapi.set_playback(time=max(ms / 1000, 0), paused=False,
                                    speed=sp)
-            if me:      # a seek clears the lock: lock once it's done
-                self.rapi.follow_after_seek(*me)
         if self._replay_call(go) and self.tl:
             self.tl.set_playhead(ms)
 
@@ -807,14 +790,11 @@ class App:
                                                  fmt_time(b / 1000)))
 
     def nudge(self, s):
-        me = self._me() if self._follow_on() else None
         self.preview_out = None
 
         def go():
             pb = self.rapi.playback()
             self.rapi.set_playback(time=pb.get("time", 0) + s)
-            if me:
-                self.rapi.follow_after_seek(*me)
         self._replay_call(go)
 
     def toggle_pause(self):
@@ -826,17 +806,6 @@ class App:
     def set_speed(self, v):
         self.prefs.set("speed", v)
         self._replay_call(lambda: self.rapi.set_playback(speed=v), quiet=True)
-
-    def follow_me(self):
-        """◎ / F: lock the camera on me now and keep it there (see
-        REPLAY's follow_me: it no longer toggles off)."""
-        if not self._follow_on():
-            self.prefs.set("follow", True)
-            self._render_remote()
-        self._offscreen = 0
-        me = self._me()
-        if me:
-            self._replay_call(lambda: self.rapi.follow(*me), quiet=True)
 
     def _now_ms(self) -> float | None:
         """Where the replay is now: the last poll moved on by the time
@@ -952,11 +921,9 @@ class App:
     def _poll_local(self):
         """Every second (4× a second during a preview): client up, replay
         open, where it is; is it still this game (every 5 s)."""
-        me = self._me() if self._follow_on() else None
         self._polls += 1
         check = self._polls % 5 == 1
         busy = self.rec is not None
-        follow = self.this_open and not busy
 
         def work():
             ok = self.lcu.running()
@@ -964,9 +931,6 @@ class App:
                 pb = self.rapi.playback()
             except local.LocalError:
                 pb = None
-            # bring the camera back — never while a clip records
-            if pb is not None and me and follow and not pb.get("seeking"):
-                self._keep_on_me(me)
             self.post(done, ok, pb)
 
         def done(ok, pb):
@@ -1184,8 +1148,7 @@ class App:
                          (("p", "P"), lambda: self.step(-1)),
                          (("i", "I"), lambda: self.set_edge("in")),
                          (("o", "O"), lambda: self.set_edge("out")),
-                         (("s", "S"), self.save),
-                         (("f", "F"), self.follow_me)):
+                         (("s", "S"), self.save)):
             for k in keys:
                 r.bind("<%s>" % k, guard(fn))
 

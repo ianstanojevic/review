@@ -107,6 +107,16 @@ source, then checked on Ian's PC with the client and a real replay open:
    recording (`/replay/recording`) the camera can't be moved at all.
    Sequences (`/replay/sequence` with a `selectionName` track) switch the
    camera to `fps`: not usable for following.
+   **Follow me removed (2026-11-23).** Even with all of the above the lock
+   held after some jumps and not others: at some times the game accepts
+   `selectionName` and never moves the camera. The reliable way is the
+   double-click on your portrait in League, and a program can't do that
+   for you (Vanguard blocks simulated input). So REPLAY no longer touches
+   the camera (no button, no F, no re-lock poll; it fought the user's own
+   camera too): a jump says "double-click your portrait in League to lock
+   the camera on you". HIGHLIGHTS' recorder still sends one lock before a
+   clip (`follow_after_seek(retries=0)`): it helps when it works and costs
+   nothing when it doesn't.
 4. **Look** — ✅ at 200 %: banner, tab row, panels and status line are
    pixel-identical to REVIEW; tab row and first panel sit on the same pixel
    rows as DRAFT. `--snapshot` captures with PrintWindow off-screen on

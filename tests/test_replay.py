@@ -386,7 +386,7 @@ def test_ui(ui, server):
     renders), which skipped or failed the second test ~4 runs in 10."""
     _ui_flow(*ui)
     _ui_with_replay_open(*ui, server)
-    _ui_keep_on_me(*ui, server)
+    _ui_jump_hint(*ui, server)
     _ui_hide_games(*ui)
     _ui_page_reuse(*ui)
 
@@ -522,41 +522,20 @@ def test_on_screen(server):
     assert api.on_screen("Jinx") is None     # not in this replay
 
 
-def _ui_keep_on_me(a, errors, server):
-    """Follow me: one off-screen poll is a glitch, two bring you back. The
-    ◎ button always locks (it used to toggle off), and a camera the
-    Directed Camera left in first person is put back to top-down."""
-    me = {"championName": "Kalista", "isDead": False,
-          "screenPositionCenter": OFF.rstrip(",")}
+def _ui_jump_hint(a, errors, server):
+    """Follow me is gone (League ignores the lock too often, and Vanguard
+    blocks simulated clicks): a jump only seeks, leaves the camera alone
+    and tells you how to lock it yourself."""
     _Fake.state = {"pb": {"time": 600.0, "seeking": False},
-                   "render": {"cameraAttached": False, "selectionName": "",
-                              "cameraMode": "fps"},
-                   "selectable": ("Kalista",), "players": [me]}
+                   "render": {"cameraAttached": False, "selectionName": ""},
+                   "selectable": ("Kalista",), "players": []}
     a.rapi = local.ReplayAPI(server)
-    a._offscreen = 0
-    a.rapi.last_lock = 0.0
-    a._keep_on_me(("Kalista", "Me"))                 # glitch frame: wait
+    a.jump(700_000)
+    assert _pump(a, 3, lambda: _Fake.state["pb"].get("time") == 685.0)
+    _pump(a, 0.8)
     assert _Fake.state["render"]["selectionName"] == ""
-    a._keep_on_me(("Kalista", "Me"))                 # still off: bring back
-    assert _Fake.state["render"]["selectionName"] == "Kalista"
-    assert _Fake.state["render"]["cameraMode"] == "top"
-    # just locked: no new lock for 3 s even if off screen
-    _Fake.state["render"]["selectionName"] = ""
-    a._keep_on_me(("Kalista", "Me"))
-    a._keep_on_me(("Kalista", "Me"))
-    assert _Fake.state["render"]["selectionName"] == ""
-    # the button: on stays on, and it locks every time
-    a.prefs.set("follow", True)
-    a.follow_me()
-    assert a._follow_on()
-    assert _pump(a, 3, lambda: _Fake.state["render"]["selectionName"]
-                 == "Kalista")
-    a.prefs.set("follow", False)
-    _Fake.state["render"]["selectionName"] = ""
-    a.follow_me()                                    # off -> on and lock
-    assert a._follow_on()
-    assert _pump(a, 3, lambda: _Fake.state["render"]["selectionName"]
-                 == "Kalista") and not errors
+    assert "portrait" in a.status["text"]
+    assert not hasattr(a, "follow_me") and not errors
 
 
 def test_timeline_groups():

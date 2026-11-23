@@ -7,7 +7,7 @@ follows the replay. Click a block to jump there, drag its edges to trim it,
 and save just that part as a video with League's own replay recorder.
 
 ```
-GAME      Sona vs Pantheon · Victory 8/6/32       ⟲10 ❚❚ 10⟳ ◎ Follow me 0.5× 1× 2×
+GAME      Sona vs Pantheon · Victory 8/6/32       ⟲10 ❚❚ 10⟳ 0.5× 1× 2×
 TIMELINE  0      5:00     10:00     15:00 …
   KILLS        ○  ✕ ●   ●●     ●    ✕
   HIGHL.        ▬▬   [██76██]    ▬▬   ███51██        <- drag the edges to trim
@@ -17,7 +17,7 @@ SAVED     ▶ 10m_double.webm   4.1 MB
 ```
 
 Keys: Space play/pause · ←/→ 10 s · N/P next/previous clip · I/O set in/out
-at the playhead · Enter preview · S save · F follow me.
+at the playhead · Enter preview · S save.
 
 Run League **borderless** (Video → Window mode) so the replay and this
 window are on screen together; in full screen the game hides as soon as you
