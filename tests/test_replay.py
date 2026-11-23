@@ -590,18 +590,37 @@ def test_remake_shows_grey_r(game_data):
 
 
 def _ui_hide_games(a, errors):
-    a.navigate("review")
-    a.root.update()
-    assert (a.games_left.winfo_manager() == "pack") and "Hide" in a.side_btn["text"]
-    a.toggle_games()
-    a.root.update()
-    assert not (a.games_left.winfo_manager() == "pack") and a.prefs.get("games_hidden")
     from review.theme.widgets import px
-    assert a.root.minsize()[0] == px(a.MIN_W_NARROW)   # can shrink now
-    a.navigate("review")              # remembered when the view is rebuilt
-    a.root.update()
-    assert not (a.games_left.winfo_manager() == "pack") and "Show" in a.side_btn["text"]
+    a.navigate("review")
+    settle = lambda: a._dock_p in (0.0, 1.0)
+
+    def size(w):
+        a.root.geometry("%dx%d" % (px(w), px(860)))
+        _pump(a, 0.6)
+    # wide: docked next to the game, hiding is remembered
+    size(1320)
+    assert a._docked and a.games_shown() and a._dock_p == 1.0
+    assert "Hide" in a.side_btn["text"]
     a.toggle_games()
-    a.root.update()
-    assert (a.games_left.winfo_manager() == "pack") and not errors
+    assert _pump(a, 2, lambda: a._dock_p == 0.0)
+    assert a.prefs.get("games_hidden") and "Show" in a.side_btn["text"]
+    a.navigate("review")
+    _pump(a, 0.4)
+    assert a._dock_p == 0.0 and not a.games_shown()
+    a.toggle_games()
+    assert _pump(a, 2, lambda: a._dock_p == 1.0)
+    # the window may be narrow with the list on: it just collapses
     assert a.root.minsize()[0] == px(a.MIN_W)
+    size(700)
+    assert not a._docked and a._dock_p == 0.0 and not a.games_shown()
+    assert a.root.winfo_width() <= px(720)          # nothing forced it wider
+    # narrow: Show slides it in over the game, picking a game closes it
+    a.toggle_games()
+    assert _pump(a, 2, lambda: a._dock_p == 1.0) and a.games_shown()
+    assert a.right.winfo_x() == 0                   # game didn't move
+    a.open_game(a.games[0].match_id)
+    assert _pump(a, 2, lambda: a._dock_p == 0.0)
+    assert not a.prefs.get("games_hidden")          # pref untouched
+    # wide again: docked list is back
+    size(1320)
+    assert a._docked and a._dock_p == 1.0 and settle() and not errors

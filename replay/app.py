@@ -187,7 +187,7 @@ class App:
         self.root.after(30, self._drain)
         root.geometry(window.safe_geometry(
             root, self.prefs.get("geometry"), (1320, 900)))
-        self._apply_minsize()
+        root.minsize(px(self.MIN_W), px(self.MIN_H))
         root.protocol("WM_DELETE_WINDOW", self.close)
         # stop the repeating timers once the window is gone (otherwise they
         # keep re-arming on the dead Tcl interpreter)
@@ -289,40 +289,96 @@ class App:
             self.side_btn.pack(side="left", padx=(SP_L, 0))
         else:
             self.side_btn.pack_forget()
-        self._apply_minsize()
         getattr(self, "_view_" + name)()
 
-    MIN_W, MIN_W_NARROW, MIN_H = 1080, 660, 680
-
-    def _apply_minsize(self):
-        """Without the games list the review view fits a much narrower
-        window (e.g. next to the game); the other views need the width."""
-        narrow = self.view == "review" and self._games_hidden()
-        self.root.minsize(px(self.MIN_W_NARROW if narrow else self.MIN_W),
-                          px(self.MIN_H))
+    # ------------------------------------------------- games list (drawer)
+    # Like a chat app's sidebar: in a wide window the list is docked next
+    # to the game (shown/hidden is remembered); in a narrow one it is
+    # collapsed and "Show games" slides it in over the game, picking a game
+    # slides it away. The window never has to grow for it.
+    MIN_W, MIN_H = 660, 680
+    LIST_W = 440
+    DOCK_AT, UNDOCK_AT = 1100, 1080      # wrap width (logical px), hysteresis
+    SLIDE_MS, SLIDE_STEPS = 170, 10
+    # until the review view first lays out (set again in _view_review)
+    _docked, _overlay_open, _dock_p = True, False, 1.0
 
     def _games_hidden(self) -> bool:
         return bool(self.prefs.get("games_hidden", False))
 
+    def games_shown(self) -> bool:
+        """Where the drawer is heading: docked-and-shown, or slid in."""
+        if self._docked:
+            return not self._games_hidden()
+        return self._overlay_open
+
     def _side_label(self):
-        self.side_btn.configure(text="›  Show games" if self._games_hidden()
-                                else "‹  Hide games")
+        self.side_btn.configure(text="‹  Hide games" if self.games_shown()
+                                else "›  Show games")
 
     def toggle_games(self):
-        """Hide/show the games list on the left (remembered)."""
-        hide = not self._games_hidden()
-        self.prefs.set("games_hidden", hide)
-        self._side_label()
-        self._apply_minsize()
-        left = getattr(self, "games_left", None)
-        if self.view != "review" or left is None or not left.winfo_exists():
+        """G / the nav button. Wide window: dock or hide the list (and
+        remember it). Narrow window: slide it in over the game, or away."""
+        if self.view != "review":
             return
-        if hide:
-            left.pack_forget()
-            self.right.pack_configure(padx=0)
+        if self._docked:
+            self.prefs.set("games_hidden", not self._games_hidden())
         else:
-            left.pack(side="left", fill="y", before=self.right)
-            self.right.pack_configure(padx=(SP_L, 0))
+            self._overlay_open = not self._overlay_open
+        self._side_label()
+        self._slide(1.0 if self.games_shown() else 0.0)
+
+    def close_games_overlay(self):
+        if not self._docked and self._overlay_open:
+            self._overlay_open = False
+            self._side_label()
+            self._slide(0.0)
+
+    def _wrap_resized(self, e):
+        w = e.width / px(1)
+        docked = w >= self.UNDOCK_AT if self._docked else w >= self.DOCK_AT
+        if docked != self._docked:            # crossed the breakpoint: snap
+            self._docked, self._overlay_open = docked, False
+            self._side_label()
+            self._dock_p = 1.0 if self.games_shown() else 0.0
+        self._place_games()
+
+    def _place_games(self):
+        """Lay out list and game for the drawer position ``_dock_p``."""
+        left, right = self.games_left, self.right
+        if not (left.winfo_exists() and right.winfo_exists()):
+            return
+        lw, gap = px(self.LIST_W), SP_L
+        p = self._dock_p
+        if p <= 0:
+            left.place_forget()
+        else:
+            left.place(x=round(-lw * (1 - p)), y=0, width=lw, relheight=1)
+        shift = round((lw + gap) * p) if self._docked else 0
+        right.place(x=shift, y=0, relwidth=1, width=-shift, relheight=1)
+        if not self._docked:
+            left.lift()                        # slides in over the game
+
+    def _slide(self, target: float):
+        job = getattr(self, "_slide_job", None)
+        if job:
+            self.root.after_cancel(job)
+            self._slide_job = None
+        start, n = self._dock_p, self.SLIDE_STEPS
+
+        def step(k=1):
+            self._slide_job = None
+            if not self.games_left.winfo_exists():
+                return
+            t = k / n
+            self._dock_p = start + (target - start) * anim.ease_out(t)
+            if k >= n:
+                self._dock_p = target
+            self._place_games()
+            if k < n:
+                self._slide_job = self.root.after(
+                    self.SLIDE_MS // n, lambda: step(k + 1))
+        step()
 
     # -------------------------------------------------------- data in
     def _load_static(self):
@@ -492,11 +548,14 @@ class App:
     def _view_review(self):
         wrap = tk.Frame(self.content, bg=DARK_BG)
         wrap.pack(fill="both", expand=True)
-        left = self.games_left = tk.Frame(wrap, bg=DARK_BG, width=px(440))
-        hidden = self._games_hidden()
-        if not hidden:
-            left.pack(side="left", fill="y")
-        left.pack_propagate(False)
+        # list and game are place()d (see _place_games) so the list can
+        # slide; docked or overlay is decided by the width (_wrap_resized)
+        left = self.games_left = tk.Frame(wrap, bg=DARK_BG)
+        ww = self.root.winfo_width() / px(1)
+        self._docked = ww >= self.DOCK_AT + 40      # wrap ≈ window - 40
+        self._overlay_open = False
+        self._dock_p = 1.0 if self.games_shown() else 0.0
+        self._slide_job = None
         p = W.CutPanel(left, padx=12, grow=True)
         p.pack(fill="both", expand=True)
         self.games_right = W.section_title(p.inner, "GAMES", EDGE_HI,
@@ -514,8 +573,9 @@ class App:
                                  rows_visible=None, tooltip=self.tooltip)
         self.games_tbl.pack(fill="both", expand=True)
         self.right = W.ScrollArea(wrap)
-        self.right.pack(side="left", fill="both", expand=True,
-                        padx=0 if hidden else (SP_L, 0))
+        self._side_label()
+        self._place_games()
+        wrap.bind("<Configure>", self._wrap_resized)
         self._fill_games()
         self._render_game()
 
@@ -567,6 +627,8 @@ class App:
     def open_game(self, match_id: str, keep_sel=False):
         if not self.player:
             return
+        if self.view == "review" and hasattr(self, "_docked"):
+            self.close_games_overlay()
         puuid = self.player["puuid"]
         prev_sel = self.sel_mark if keep_sel else None
 
@@ -1341,14 +1403,17 @@ class App:
             top = max(d_counts.items(), key=lambda kv: kv[1][0])
             if top[0] != "worth":
                 p, _ = panel(body, "FOCUS NEXT", EDGE_HI, pady=(SP_M, 0))
-                tk.Label(p, text="%s is behind %.0f%% of your tagged deaths%s."
+                lbl = tk.Label(p, text="%s is behind %.0f%% of your tagged deaths%s."
                          " Make it the one thing you watch for next session."
                          % (category_label(DEATH, top[0]),
                             100 * top[1][0] / n_d,
                             " (%d of them avoidable)" % top[1][1]
                             if top[1][1] else ""),
                          bg=PANEL, fg=FG, font=F_MD, wraplength=px(900),
-                         justify="left").pack(anchor="w")
+                         justify="left")
+                lbl.pack(anchor="w", fill="x")
+                lbl.bind("<Configure>", lambda e, l=lbl: l.configure(
+                    wraplength=max(e.width - px(4), px(200))))
         # recent notes
         p, _ = panel(body, "RECENT DEATH NOTES", pady=(SP_M, 0))
         notes = [m for m in self.notes.recent_marks(puuid, DEATH, 40)
@@ -1481,6 +1546,7 @@ class App:
             r.bind("<%s>" % k, guard(self.follow_me))
         for k in ("g", "G"):
             r.bind("<%s>" % k, guard(self.toggle_games))
+        r.bind("<Escape>", guard(self.close_games_overlay))
 
     # ------------------------------------------------------ settings
     def show_settings(self):

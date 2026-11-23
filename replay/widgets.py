@@ -192,10 +192,29 @@ class TimelineBar(tk.Canvas):
         self.cursor_ms: float | None = None
         self.hits: list[tuple[float, float, float, float, Any, str]] = []
         self._hover = None
-        self.bind("<Configure>", lambda e: self.redraw())
+        self._resize_job = None
+        self._drawn_size = None
+        self.bind("<Configure>", self._resized)
         self.bind("<Button-1>", self._click)
         self.bind("<Motion>", self._motion)
         self.bind("<Leave>", lambda e: self._tip(None))
+
+    def _resized(self, e):
+        """Redraw once the size settles: the antialiased picture costs a
+        few ms, and a window drag sends dozens of <Configure>s."""
+        if (e.width, e.height) == self._drawn_size:
+            return
+        if self._drawn_size is None:          # first layout: draw now
+            self.redraw()
+            return
+        if self._resize_job:
+            self.after_cancel(self._resize_job)
+        self._resize_job = self.after(60, self._settled)
+
+    def _settled(self):
+        self._resize_job = None
+        if self.winfo_exists():
+            self.redraw()
 
     # data
     def set(self, duration_ms, moments, marks, selected=None):
@@ -250,6 +269,7 @@ class TimelineBar(tk.Canvas):
         if x1 - x0 < 20:
             return
         w = self.winfo_width()
+        self._drawn_size = (w, h)
         pen = Pen(w, h, bg=self["bg"], ss=3)
         top_y, low_y, axis_y = px(self.TOP), px(self.LOW), px(self.AXIS)
         lbl = mix(DIM, self["bg"], 0.15)

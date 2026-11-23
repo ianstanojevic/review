@@ -742,14 +742,16 @@ class Table(tk.Frame):
         fixed = sum(c.width * self.chw + 2 * self.gap for c in self.cols
                     if c.kind != "icon") + sum(
             self.icon_px + px(8) for c in self.cols if c.kind == "icon")
-        spare = max(0, width - fixed - px(6))
+        # spare < 0 in a narrow window: the stretch column gives up width
+        # (down to 4 characters) instead of pushing the others off the edge
+        spare = width - fixed - px(6)
         for c in self.cols:
             if c.kind == "icon":
                 w = self.icon_px + px(8)
             else:
                 w = c.width * self.chw + 2 * self.gap
                 if c.stretch:
-                    w += spare
+                    w = max(w + spare, 4 * self.chw + 2 * self.gap)
             xs.append((x, x + w))
             x += w
         return xs
@@ -893,10 +895,29 @@ class Table(tk.Frame):
                 if first_text and col.align == "w" and r.marked:
                     text, colr = "◆ " + text, EDGE_HI
                 first_text = first_text and col.align != "w"
+                text = self._fit_text(text, x1 - x0 - self.gap - px(2))
                 c.create_text(x, cy, text=text, anchor=anchor, fill=colr,
                               font=F_SM)
         c.configure(scrollregion=(0, 0, w, len(self.view) * rh))
         self.hover = -1
+
+    def _fit_text(self, text: str, avail: float) -> str:
+        """``text``, cut with "…" if it is wider than ``avail`` px (a long
+        note in a narrow window would run into the next column)."""
+        if len(text) * self.chw * 1.7 <= avail:      # surely fits: no measure
+            return text
+        f = getattr(self, "_font", None) or tkfont.Font(font=F_SM)
+        self._font = f
+        if f.measure(text) <= avail:
+            return text
+        lo, hi = 0, len(text)
+        while lo < hi:                       # longest prefix that fits
+            mid = (lo + hi + 1) // 2
+            if f.measure(text[:mid].rstrip() + "…") <= avail:
+                lo = mid
+            else:
+                hi = mid - 1
+        return text[:lo].rstrip() + "…" if lo else ""
 
     def _row_at(self, y):
         i = int(self.body.canvasy(y) // self.row_h)
