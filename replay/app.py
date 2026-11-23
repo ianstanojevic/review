@@ -303,6 +303,7 @@ class App:
     SLIDE_MS, SLIDE_STEPS = 170, 10
     # until the review view first lays out (set again in _view_review)
     _docked, _overlay_open, _dock_p = True, False, 1.0
+    _slide_w = None                      # page width held during a slide
 
     def _games_hidden(self) -> bool:
         return bool(self.prefs.get("games_hidden", False))
@@ -356,7 +357,14 @@ class App:
         else:
             left.place(x=round(-lw * (1 - p)), y=0, width=lw, relheight=1)
         shift = round((lw + gap) * p) if self._docked else 0
-        right.place(x=shift, y=0, relwidth=1, width=-shift, relheight=1)
+        if self._slide_w:
+            # mid-slide: move the page, keep its width. Resizing it
+            # re-lays out every widget on it (~100 ms a frame on Windows);
+            # moving it is one window move.
+            right.place(x=shift, y=0, relwidth=0, width=self._slide_w,
+                        relheight=1)
+        else:
+            right.place(x=shift, y=0, relwidth=1, width=-shift, relheight=1)
         if not self._docked:
             left.lift()                        # slides in over the game
 
@@ -370,24 +378,36 @@ class App:
             fn()
 
     def _slide(self, target: float):
+        """Animate the drawer to ``target`` (0 hidden, 1 shown). Docked,
+        the page keeps one width for the whole slide and is re-laid out
+        once: at the start when it grows (hiding), at the end when it
+        shrinks (showing), so the frames in between are cheap moves."""
         job = getattr(self, "_slide_job", None)
         if job:
             self.root.after_cancel(job)
             self._slide_job = None
-        start, n = self._dock_p, self.SLIDE_STEPS
+        start = self._dock_p
+        if self._docked and target != start:
+            full = self.right.master.winfo_width()
+            lw = px(self.LIST_W) + SP_L
+            self._slide_w = full if target < start else max(
+                full - round(lw * start), 1)
+            self._place_games()               # hiding: grow it now, once
+            self.root.update_idletasks()
+        t0 = time.monotonic()
 
-        def step(k=1):
+        def step():
             self._slide_job = None
             if not self.games_left.winfo_exists():
                 return
-            t = k / n
+            t = min((time.monotonic() - t0) * 1000 / self.SLIDE_MS, 1.0)
             self._dock_p = start + (target - start) * anim.ease_out(t)
-            if k >= n:
-                self._dock_p = target
+            if t >= 1.0:
+                self._dock_p, self._slide_w = target, None
             self._place_games()
-            if k < n:
+            if t < 1.0:
                 self._slide_job = self.root.after(
-                    self.SLIDE_MS // n, lambda: step(k + 1))
+                    self.SLIDE_MS // self.SLIDE_STEPS, step)
             else:
                 fns, self._after_slide_fns = getattr(
                     self, "_after_slide_fns", []), []
