@@ -9,6 +9,15 @@ from dataclasses import dataclass, field
 from .model import fmt_time
 
 OBJECTIVE_WINDOW_MS = 60_000
+REMAKE_SECONDS = 300      # same rule as REVIEW (review.analysis.extract)
+
+
+def is_remake(info: dict) -> bool:
+    """A remake: ended early (surrender vote before 3-4 min) or so short
+    that it can't be a real game. Its W/L means nothing."""
+    return (info.get("gameDuration", 0) < REMAKE_SECONDS
+            or any(p.get("gameEndedInEarlySurrender")
+                   for p in info.get("participants", [])))
 EPIC = {"DRAGON": "Dragon", "BARON_NASHOR": "Baron", "RIFTHERALD": "Herald",
         "HORDE": "Grubs", "ATAKHAN": "Atakhan", "ELDER_DRAGON": "Elder"}
 
@@ -59,6 +68,7 @@ class GameView:
     enemy_support: Player | None = None
     moments: list[Moment] = field(default_factory=list)
     has_timeline: bool = True
+    remake: bool = False
 
     @property
     def patch(self) -> str:
@@ -134,7 +144,8 @@ def build_game(match: dict, timeline: dict | None, puuid: str) -> GameView:
         duration_s=info.get("gameDuration", 0),
         created_ms=info.get("gameCreation", 0),
         version=info.get("gameVersion", ""), queue=info.get("queueId", 0),
-        opponent=opp, ally_support=ally_sup, enemy_support=enemy_sup)
+        opponent=opp, ally_support=ally_sup, enemy_support=enemy_sup,
+        remake=is_remake(info))
     if timeline:
         g.moments = _moments(g, timeline)
     else:

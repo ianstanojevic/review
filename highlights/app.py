@@ -32,6 +32,7 @@ from pathlib import Path
 
 from replay import local
 from replay.app import QUEUE_SHORT, QUEUES, ROLE_SHORT, GameRow, _clear, _date
+from replay.app import result_cell, result_text
 from replay.app import App as _Replay
 from replay.app import Prefs as _ReplayPrefs
 from replay.app import panel
@@ -323,7 +324,7 @@ class App:
             n = self._clip_count(g)
             rows.append(W.Row({
                 "champ": (g.champion, FG), "vs": (g.opponent or "", DIM),
-                "res": ("W" if g.win else "L", GOOD if g.win else BAD),
+                "res": result_cell(g),
                 "kda": (g.kda, DIM), "date": (_date(g.created), DIM),
                 "clips": (str(n) if n else "—", GOOD if n else DIM),
                 "rec": ("old patch", mix(DIM, PANEL, 0.3))
@@ -444,11 +445,11 @@ class App:
         vs = static.champion_name(g.opponent.champion) if g.opponent else "?"
         tk.Label(t, text="%s  vs  %s" % (name, vs), bg=PANEL, fg=FG,
                  font=F_LG_B).pack(anchor="w")
+        res, res_fg = result_text(g)
         tk.Label(t, text="%s · %s · %s · %s · %d highlights" % (
-            "Victory" if g.win else "Defeat",
-            ROLE_SHORT.get(g.me.role or "", "?"), g.kda_text,
+            res, ROLE_SHORT.get(g.me.role or "", "?"), g.kda_text,
             fmt_time(g.duration_s), len(self.hl)), bg=PANEL,
-            fg=GOOD if g.win else BAD, font=F_SM).pack(anchor="w")
+            fg=res_fg, font=F_SM).pack(anchor="w")
         self.remote = tk.Frame(top, bg=PANEL)
         self.remote.pack(side="right")
         self._render_remote()

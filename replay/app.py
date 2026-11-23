@@ -37,7 +37,7 @@ from review.theme.widgets import px
 from review.ui.assets import IconStore
 
 from . import local, rofl
-from .events import GameView, build_game, context_lines
+from .events import GameView, build_game, context_lines, is_remake
 from .model import (AVOIDABLE, BOOKMARK, CATEGORIES, DEATH,
                     DEATH_CATEGORIES, KINDS, LANE_RATING, MISSED,
                     MISSED_CATEGORIES, category_label, fmt_time)
@@ -108,7 +108,7 @@ class GameRow:
     """What the games list needs, without the timeline."""
     __slots__ = ("match_id", "game_id", "champion", "role", "opponent",
                  "win", "kda", "deaths", "created", "duration", "queue",
-                 "version")
+                 "version", "remake")
 
     def __init__(self, match: dict, puuid: str):
         info = match["info"]
@@ -130,6 +130,21 @@ class GameRow:
         self.duration = info.get("gameDuration", 0)
         self.queue = info.get("queueId", 0)
         self.version = info.get("gameVersion", "")
+        self.remake = is_remake(info)
+
+
+def result_cell(g) -> tuple[str, str]:
+    """Games-list result: W / L, or a grey R for a remake."""
+    if g.remake:
+        return "R", DIM
+    return ("W", GOOD) if g.win else ("L", BAD)
+
+
+def result_text(g) -> tuple[str, str]:
+    """Game header: Victory / Defeat, or Remake in grey."""
+    if g.remake:
+        return "Remake", DIM
+    return ("Victory", GOOD) if g.win else ("Defeat", BAD)
 
 
 class App:
@@ -491,7 +506,7 @@ class App:
             rows.append(W.Row({
                 "champ": (g.champion, FG),
                 "vs": (g.opponent or "", DIM),
-                "res": ("W" if g.win else "L", GOOD if g.win else BAD),
+                "res": result_cell(g),
                 "date": (_date(g.created), DIM),
                 "tag": tag,
                 "rep": self._replay_cell(g)},
@@ -591,11 +606,11 @@ class App:
         vs = static.champion_name(g.opponent.champion) if g.opponent else "?"
         tk.Label(t, text="%s  vs  %s" % (name, vs), bg=PANEL, fg=FG,
                  font=F_LG_B).pack(anchor="w")
+        res, res_fg = result_text(g)
         sub = "%s · %s · %s · %d CS · %s" % (
-            "Victory" if g.win else "Defeat", ROLE_SHORT.get(g.me.role or "",
-                                                         "?"),
+            res, ROLE_SHORT.get(g.me.role or "", "?"),
             g.kda_text, g.cs, fmt_time(g.duration_s))
-        tk.Label(t, text=sub, bg=PANEL, fg=GOOD if g.win else BAD,
+        tk.Label(t, text=sub, bg=PANEL, fg=res_fg,
                  font=F_SM).pack(anchor="w")
         # replay remote
         self.remote = tk.Frame(top, bg=PANEL)

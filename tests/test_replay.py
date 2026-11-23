@@ -567,3 +567,22 @@ def test_timeline_groups():
     assert len(group_moments(chain, x_of, 1)) == 2
     tip = group_tip(chain, limit=3)
     assert tip.splitlines()[0] == "0:00  0" and tip.endswith("… 5 more")
+
+
+def test_remake_shows_grey_r(game_data):
+    from replay.app import GameRow, result_cell, result_text
+    from replay.events import is_remake
+    from review.theme.tokens import BAD, DIM
+    m, tl, puuid = game_data["match"], game_data["timeline"], "puuid-me"
+    g = build_game(m, tl, puuid)
+    assert not g.remake and result_cell(g)[0] in "WL"
+    info = m["info"]
+    assert is_remake({**info, "gameDuration": 200})
+    early = {**info, "participants": [{**p, "gameEndedInEarlySurrender": True}
+                                      for p in info["participants"]]}
+    assert is_remake(early)
+    rm = {**m, "info": {**early, "participants": [
+        {**p, "win": False} for p in early["participants"]]}}
+    row = GameRow(rm, puuid)
+    assert row.remake and result_cell(row) == ("R", DIM) != ("L", BAD)
+    assert result_text(build_game(rm, tl, puuid)) == ("Remake", DIM)
