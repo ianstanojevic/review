@@ -356,11 +356,17 @@ def ui(tmp_path, monkeypatch):
     a.lcu = local.LeagueClient(tmp_path)
     a.rapi = local.ReplayAPI(1)
     a.set_player(player)
+    before = set(threading.enumerate())
     yield a, errors
+    a.rapi = local.ReplayAPI(1)       # in-flight polls stop touching the
+    a.playback = None                 # fake server the next tests share
     try:
         a.root.destroy()
     except tk.TclError:
         pass
+    end = time.time() + 3
+    for t in set(threading.enumerate()) - before:
+        t.join(max(0.0, end - time.time()))
 
 
 def _pump(app, secs=1.5, until=None):
@@ -630,6 +636,7 @@ def _ui_hide_games(a, errors):
 def _ui_page_reuse(a, errors):
     """Switching games refills the same page instead of rebuilding it, and
     a matchup note typed just before the switch is still saved."""
+    a.rapi, a.playback = local.ReplayAPI(1), None     # done with the server
     a.navigate("review")
     assert _pump(a, 4, lambda: a.game is not None and a._page is not None)
     body, tl, lst = a.right.body, a.tl, a._moment_list
