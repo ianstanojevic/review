@@ -41,6 +41,15 @@ def get_region(code: str) -> Region:
                          % (code, ", ".join(REGIONS))) from None
 
 
+def region_for_platform(platform: str) -> Region | None:
+    """'na1' -> Region NA (None when unknown)."""
+    platform = (platform or "").strip().lower()
+    for r in REGIONS.values():
+        if r.platform == platform:
+            return r
+    return None
+
+
 def parse_riot_id(text: str) -> tuple[str, str]:
     """'flintgnuggaren#ian' -> ('flintgnuggaren', 'ian').
 

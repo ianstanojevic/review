@@ -143,3 +143,44 @@ def test_cancel_keeps_partial(cache):
     assert res.cancelled
     assert 0 < res.matches_fetched < 200
     assert len(cache.player_match_ids(ME)) == res.matches_fetched
+
+
+class RegionClient(FakeClient):
+    """Records which server each call went to; the player lives on NA."""
+
+    def __init__(self, platform="na1", fail=False, **kw):
+        super().__init__(**kw)
+        self.platform, self.fail, self.hosts = platform, fail, []
+
+    def active_platform(self, region, puuid, cancel=None):
+        self._tick(cancel)
+        if self.fail:
+            raise NotFound()
+        return self.platform
+
+    def match_ids(self, region, puuid, **kw):
+        self.hosts.append(region.code)
+        return super().match_ids(region, puuid, **kw)
+
+
+def test_detect_region_fetches_on_the_players_own_server(cache):
+    fc = RegionClient(n_games=5)
+    job = SyncJob(fc, cache, "Doublelift#NA01", EUW, count=5,
+                  detect_region=True)
+    res = job.run()
+    assert fc.hosts and set(fc.hosts) == {"NA"}
+    assert res.region == "NA" and job.region.code == "NA"
+    assert cache.find_player("doublelift", "na01", None) == ME
+    assert cache.find_player("doublelift", "na01", "EUW") is None
+
+
+def test_detect_region_falls_back_when_lookup_fails(cache):
+    fc = RegionClient(n_games=5, fail=True)
+    res = SyncJob(fc, cache, "a#b", EUW, count=5, detect_region=True).run()
+    assert set(fc.hosts) == {"EUW"} and res.region == "EUW"
+
+
+def test_no_detection_by_default(cache):
+    fc = RegionClient(n_games=5)
+    SyncJob(fc, cache, "a#b", EUW, count=5).run()
+    assert set(fc.hosts) == {"EUW"}

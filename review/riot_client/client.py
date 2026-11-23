@@ -145,6 +145,16 @@ class RiotClient:
             urllib.parse.quote(tag, safe=""))
         return self.get(region.account_host, path, cancel=cancel)
 
+    def active_platform(self, region: Region, puuid: str,
+                        cancel=None) -> str | None:
+        """The server the player plays LoL on ("na1", "euw1"…) — account-v1
+        is global, so a Riot ID resolves anywhere, but games only exist on
+        the player's own server."""
+        d = self.get(region.account_host,
+                     "/riot/account/v1/region/by-game/lol/by-puuid/%s"
+                     % puuid, cancel=cancel)
+        return (d or {}).get("region")
+
     def league_entries(self, region: Region, puuid: str,
                        cancel=None) -> list[dict]:
         return self.get(region.platform,

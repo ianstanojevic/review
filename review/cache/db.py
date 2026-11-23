@@ -241,12 +241,16 @@ class Cache:
                 (puuid, game_name, tag_line, region, int(time.time())))
 
     def find_player(self, game_name: str, tag_line: str,
-                    region: str) -> str | None:
+                    region: str | None) -> str | None:
+        """region=None: any server (Riot IDs are unique across regions)."""
+        sql = ("SELECT puuid FROM players WHERE lower(game_name)=lower(?) "
+               "AND lower(tag_line)=lower(?)")
+        args: tuple = (game_name, tag_line)
+        if region is not None:
+            sql += " AND region=?"
+            args += (region,)
         with self._lock:
-            row = self._db.execute(
-                "SELECT puuid FROM players WHERE lower(game_name)=lower(?) "
-                "AND lower(tag_line)=lower(?) AND region=?",
-                (game_name, tag_line, region)).fetchone()
+            row = self._db.execute(sql, args).fetchone()
         return row[0] if row else None
 
     # -- rank snapshots -------------------------------------------------

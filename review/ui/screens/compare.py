@@ -132,11 +132,17 @@ class CompareScreen(Screen):
                     return
                 self.me = me
                 for o in self.others:
-                    if o["riot_id"] in results:
-                        o["puuid"], o["res"] = results[o["riot_id"]]
+                    pu, r = results.get(o["riot_id"], (None, None))
+                    if r is not None and r.radar is not None:
+                        o["puuid"], o["res"] = pu, r
                         o["status"] = "ready"
                     elif o["status"] == "waiting":
-                        self._fetch(o)       # not cached yet: download
+                        # not cached yet, or cached with no games (e.g.
+                        # fetched on the wrong server before): download
+                        self._fetch(o)
+                    elif r is not None:
+                        o["puuid"], o["res"] = pu, r
+                        o["status"] = "no games with these filters"
                 self._render()
             app.post(done)
         threading.Thread(target=work, daemon=True).start()
@@ -147,7 +153,8 @@ class CompareScreen(Screen):
             name, tag = parse_riot_id(riot_id)
         except ValueError:
             return None
-        return self.app.cache.find_player(name, tag, self.app.player["region"])
+        # any server: a friend may play on NA while you're on EUW
+        return self.app.cache.find_player(name, tag, None)
 
     # ------------------------------------------------------- add/remove
     def add(self, riot_id):
@@ -210,7 +217,8 @@ class CompareScreen(Screen):
                 app.post(self._chips)
         job = SyncJob(client, app.cache, o["riot_id"], reg,
                       queues=QUEUES[app.queue_key],
-                      count=min(app.count, 100), on_progress=prog)
+                      count=min(app.count, 100), on_progress=prog,
+                      detect_region=True)
         o["job"] = job
         job.start()
 
@@ -221,8 +229,9 @@ class CompareScreen(Screen):
                 self.after(400, poll)
                 return
             o["job"] = None
+            o["region"] = job.region.code
             if isinstance(job.error, PlayerNotFound):
-                o["status"] = "not found on %s" % reg.code
+                o["status"] = "not found"
                 self._chips()
                 return
             pu = (job.result.puuid if job.result else None) or \
@@ -288,6 +297,10 @@ class CompareScreen(Screen):
                 side="left", padx=(0, px(6)))
             tk.Label(c, text=rid, bg=PANEL2, fg=FG, font=F_SM_B).pack(
                 side="left")
+            reg = (o or {}).get("region")
+            if reg and reg != self.app.player["region"]:
+                tk.Label(c, text=reg, bg=PANEL2, fg=DIM, font=F_XS_B).pack(
+                    side="left", padx=(px(6), 0))
             res = (o or {}).get("res") if o else self.me
             sub = status
             if res is not None and status in ("ready", "you"):

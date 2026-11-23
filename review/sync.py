@@ -63,8 +63,12 @@ class SyncJob:
     def __init__(self, client: RiotClient, cache: Cache, riot_id: str,
                  region: Region, *, queues: tuple[int, ...] = (420,),
                  count: int = DEFAULT_GAMES, workers: int = 2,
-                 on_progress: Callable[[Progress], None] | None = None):
+                 on_progress: Callable[[Progress], None] | None = None,
+                 detect_region: bool = False):
         self.client, self.cache, self.region = client, cache, region
+        # look up which server the player is on (Compare: a friend on NA
+        # while you're on EUW) instead of assuming `region`
+        self.detect_region = detect_region
         self.game_name, self.tag = parse_riot_id(riot_id)
         self.queues = tuple(queues)
         self.count = max(MIN_GAMES, min(MAX_GAMES, int(count)))
@@ -127,6 +131,9 @@ class SyncJob:
             raise PlayerNotFound("No player called %s#%s on %s."
                                  % (self.game_name, self.tag, reg.code))
         puuid = acct["puuid"]
+        if self.detect_region:
+            reg = self._own_region(puuid, reg)
+            self.region = reg
         name = "%s#%s" % (acct.get("gameName") or self.game_name,
                           acct.get("tagLine") or self.tag)
         self.cache.upsert_player(puuid, acct.get("gameName") or self.game_name,
@@ -161,6 +168,17 @@ class SyncJob:
                    total=len(res.match_ids),
                    message="Cancelled" if res.cancelled else "Done")
         return res
+
+    def _own_region(self, puuid: str, fallback: Region) -> Region:
+        from .riot_client.routing import region_for_platform
+        try:
+            plat = self.client.active_platform(fallback, puuid,
+                                               cancel=self._cancel)
+        except Cancelled:
+            raise
+        except Exception:                    # noqa: BLE001 — keep going
+            return fallback
+        return region_for_platform(plat) or fallback
 
     def _collect_ids(self, reg: Region, puuid: str) -> list[str]:
         ids: set[str] = set()
