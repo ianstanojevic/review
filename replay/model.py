@@ -10,6 +10,7 @@ DEATH_CATEGORIES = [
     ("position", "Positioning"),
     ("vision", "No vision / info"),
     ("overextend", "Overextended"),
+    ("greed", "Greed (tower / wave)"),
     ("trade", "Bad trade / all-in"),
     ("gank", "Avoidable gank"),
     ("mechanics", "Mechanics"),

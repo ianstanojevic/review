@@ -381,6 +381,7 @@ def test_ui(ui, server):
     _ui_flow(*ui)
     _ui_with_replay_open(*ui, server)
     _ui_keep_on_me(*ui, server)
+    _ui_hide_games(*ui)
 
 
 def _ui_flow(a, errors):
@@ -586,3 +587,18 @@ def test_remake_shows_grey_r(game_data):
     row = GameRow(rm, puuid)
     assert row.remake and result_cell(row) == ("R", DIM) != ("L", BAD)
     assert result_text(build_game(rm, tl, puuid)) == ("Remake", DIM)
+
+
+def _ui_hide_games(a, errors):
+    a.navigate("review")
+    a.root.update()
+    assert (a.games_left.winfo_manager() == "pack") and "Hide" in a.side_btn["text"]
+    a.toggle_games()
+    a.root.update()
+    assert not (a.games_left.winfo_manager() == "pack") and a.prefs.get("games_hidden")
+    a.navigate("review")              # remembered when the view is rebuilt
+    a.root.update()
+    assert not (a.games_left.winfo_manager() == "pack") and "Show" in a.side_btn["text"]
+    a.toggle_games()
+    a.root.update()
+    assert (a.games_left.winfo_manager() == "pack") and not errors

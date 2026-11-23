@@ -222,13 +222,19 @@ class App:
         acc = W.button(nav, "Account", self.ask_account, fg=DIM, font=F_SM)
         acc.configure(pady=4)
         acc.pack(side="right", padx=(0, SP_S))
+        # Review view only: hide the games list while reviewing one game
+        self.side_btn = W.button(nav, "", self.toggle_games, fg=DIM,
+                                 font=F_SM)
+        self.side_btn.configure(pady=4)
+        self._side_label()
         self.content = tk.Frame(outer, bg=DARK_BG)
         self.content.pack(fill="both", expand=True)
         bottom = tk.Frame(outer, bg=DARK_BG)
         bottom.pack(fill="x", side="bottom", pady=(SP_M, 0))
         self.keys_lbl = tk.Label(
             bottom, text="Space play/pause · ←/→ 10 s · N next untagged · "
-            "M missed chance · B bookmark · F follow me", bg=DARK_BG,
+            "M missed chance · B bookmark · F follow me · G games list",
+            bg=DARK_BG,
             fg=mix(DIM, DARK_BG, 0.35), font=F_XS)
         self.keys_lbl.pack(side="left", anchor="s")
         self.status = tk.Label(bottom, text="", bg=DARK_BG, fg=DIM, font=F_SM)
@@ -278,7 +284,33 @@ class App:
         self.nav.select(name, fire=False)
         _clear(self.content)
         self.tl = None
+        if name == "review":
+            self.side_btn.pack(side="left", padx=(SP_L, 0))
+        else:
+            self.side_btn.pack_forget()
         getattr(self, "_view_" + name)()
+
+    def _games_hidden(self) -> bool:
+        return bool(self.prefs.get("games_hidden", False))
+
+    def _side_label(self):
+        self.side_btn.configure(text="›  Show games" if self._games_hidden()
+                                else "‹  Hide games")
+
+    def toggle_games(self):
+        """Hide/show the games list on the left (remembered)."""
+        hide = not self._games_hidden()
+        self.prefs.set("games_hidden", hide)
+        self._side_label()
+        left = getattr(self, "games_left", None)
+        if self.view != "review" or left is None or not left.winfo_exists():
+            return
+        if hide:
+            left.pack_forget()
+            self.right.pack_configure(padx=0)
+        else:
+            left.pack(side="left", fill="y", before=self.right)
+            self.right.pack_configure(padx=(SP_L, 0))
 
     # -------------------------------------------------------- data in
     def _load_static(self):
@@ -448,8 +480,10 @@ class App:
     def _view_review(self):
         wrap = tk.Frame(self.content, bg=DARK_BG)
         wrap.pack(fill="both", expand=True)
-        left = tk.Frame(wrap, bg=DARK_BG, width=px(440))
-        left.pack(side="left", fill="y")
+        left = self.games_left = tk.Frame(wrap, bg=DARK_BG, width=px(440))
+        hidden = self._games_hidden()
+        if not hidden:
+            left.pack(side="left", fill="y")
         left.pack_propagate(False)
         p = W.CutPanel(left, padx=12, grow=True)
         p.pack(fill="both", expand=True)
@@ -469,7 +503,7 @@ class App:
         self.games_tbl.pack(fill="both", expand=True)
         self.right = W.ScrollArea(wrap)
         self.right.pack(side="left", fill="both", expand=True,
-                        padx=(SP_L, 0))
+                        padx=0 if hidden else (SP_L, 0))
         self._fill_games()
         self._render_game()
 
@@ -1080,7 +1114,9 @@ class App:
         cats = CATEGORIES.get(mk.kind) or []
         if cats:
             W.caption(box, "WHY" if mk.kind == DEATH else "WHAT YOU MISSED")
-            Chips(box, cats, mk.category, columns=4, color=GOOD,
+            # full rows: 9 reasons as 3x3, otherwise rows of 4
+            cols = 3 if len(cats) % 4 and not len(cats) % 3 else 4
+            Chips(box, cats, mk.category, columns=cols, color=GOOD,
                   on_change=lambda v, i=mk.id: self._set(i, category=v)
                   ).pack(fill="x")
         if mk.kind == DEATH:
@@ -1431,6 +1467,8 @@ class App:
             r.bind("<%s>" % k, guard(lambda: self.add_mark(BOOKMARK)))
         for k in ("f", "F"):
             r.bind("<%s>" % k, guard(self.follow_me))
+        for k in ("g", "G"):
+            r.bind("<%s>" % k, guard(self.toggle_games))
 
     # ------------------------------------------------------ settings
     def show_settings(self):
