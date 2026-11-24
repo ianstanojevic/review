@@ -188,3 +188,9 @@ def test_empty_reference_falls_back_to_own_games(cfg):
                 reference_label="Master+")
     assert r.reference_label is None and r.reference_games == 0
     assert r.radar is not None and r.radar.overall == r.radar.overall
+
+
+def test_every_stat_has_a_plain_explanation():
+    from review.analysis.metrics import HELP, METRICS
+    assert set(METRICS) <= set(HELP)
+    assert all(len(HELP[k]) < 140 for k in METRICS)

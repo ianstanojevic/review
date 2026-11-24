@@ -14,7 +14,8 @@ import threading
 import tkinter as tk
 
 from ...analysis import AXES, Filter, fmt_value
-from ...analysis.radar import AXIS_LABEL
+from ...analysis.metrics import HELP
+from ...analysis.radar import AXIS_HELP, AXIS_LABEL
 from ...theme import widgets as W
 from ...theme.radar import Overlay, RadarChart
 from ...theme.tokens import (BAD, DIM, DMG_AD, DMG_AP, EDGE, EDGE_HI, F_LG_B,
@@ -490,7 +491,7 @@ class CompareScreen(Screen):
             for i, (name, _, _) in enumerate(players)]
         rows = []
 
-        def add(label, vals, texts, higher_better=True):
+        def add(label, vals, texts, higher_better=True, tip=None):
             cells = {"stat": label}
             ok = [v for v in vals if v is not None and v == v]
             best = worst = None
@@ -509,7 +510,8 @@ class CompareScreen(Screen):
                     elif v == worst:
                         col = BAD
                 cells["p%d" % i] = (t, col)
-            rows.append(Row(cells, marked=label == "Overall score"))
+            rows.append(Row(cells, marked=label == "Overall score",
+                            tip=tip))
 
         R = [t[2] for t in players]
         add("Overall score", [r.radar.overall for r in R],
@@ -519,7 +521,8 @@ class CompareScreen(Screen):
              "%.0f" % r.radar.overall for r in R])
         for j, ax in enumerate(AXES):
             add(AXIS_LABEL[ax], [r.radar.axes[j].score for r in R],
-                ["%.0f" % r.radar.axes[j].score for r in R])
+                ["%.0f" % r.radar.axes[j].score for r in R],
+                tip=AXIS_HELP.get(ax))
         add("Win rate", [r.record.p for r in R],
             ["%.0f%% ±%.0f" % (100 * r.record.p, 100 * (r.record.ci[1] -
                                                          r.record.ci[0]) / 2)
@@ -547,7 +550,8 @@ class CompareScreen(Screen):
                 _, label, m, _, pol = ks
                 vals.append(m.mean)
                 texts.append(fmt_value(key, m.mean))
-            add(label, vals, texts, higher_better=pol >= 0)
+            add(label, vals, texts, higher_better=pol >= 0,
+                tip=HELP.get(key))
         # each player column as wide as its longest text ("Challenger 3662
         # LP" overflowed a fixed 12-character column into its neighbour);
         # measured in pixels, since Col.width counts "0"-widths

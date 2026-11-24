@@ -20,6 +20,7 @@ from ...theme.tokens import (BAD, DIM, DMG_AD, DMG_AP, DMG_TRUE, EDGE_HI,
                              F_LG_B, F_SM, F_SM_B, F_XS, F_XS_B, FG, GHOST,
                              GOOD, HOVER, PANEL, PANEL2, score_color)
 from ...theme.widgets import Col, Row, Table, px
+from ...analysis.metrics import HELP
 from .base import (Screen, chart_block, clear, cname, date_text, empty_note,
                    fit_wrap,
                    fifty_means, group_name, panel, peer_word, radar_axes,
@@ -441,7 +442,7 @@ class RadarScreen(Screen):
                 "pct": ("%.0f" % s.score if ok else "—",
                         score_color(s.score) if ok else DIM),
                 "bar": [(s.score / 100, score_color(s.score))] if ok
-                else []}, data=s))
+                else []}, data=s, tip=HELP.get(getattr(s, "key", ""))))
         if a.axis == "consistency":
             rows.append(Row({"m": "Game-to-game steadiness + after-loss "
                              "vs after-win", "pct": ("%.0f" % a.score,

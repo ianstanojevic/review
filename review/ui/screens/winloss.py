@@ -8,6 +8,7 @@ import math
 import tkinter as tk
 
 from ...analysis import METRICS, fmt_value
+from ...analysis.metrics import HELP
 from ...theme.charts import DivergingBars, DivItem
 from ...theme.tokens import BAD, DIM, EDGE_HI, F_SM, FG, GOOD, PANEL
 from ...theme.widgets import Col, Row, Table, px
@@ -74,7 +75,8 @@ class WinLossScreen(Screen):
                 "l": (fmt_value(d.key, z), BAD),
                 "bar": bars,
                 "d": ("%+.2f ±%.2f" % (e.d, (e.hi - e.lo) / 2),
-                      GOOD if good else BAD)}, data=d))
+                      GOOD if good else BAD)}, data=d,
+                tip=HELP.get(d.key)))
         t.set_rows(rows)
         t.pack(fill="x")
 

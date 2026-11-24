@@ -40,6 +40,18 @@ AXES = ("fighting", "farming", "vision", "aggression", "survival",
         "teamplay", "objectives", "consistency")
 SCORED = AXES[:-1]
 AXIS_LABEL = {a: a.capitalize() for a in AXES}
+AXIS_HELP = {
+    "fighting": "KDA, damage, solo kills and how you trade in fights.",
+    "farming": "CS per minute, CS and gold vs your lane opponent.",
+    "vision": "Vision score, wards placed and cleared, control wards.",
+    "aggression": "Early kills, early damage, turret plates and towers.",
+    "survival": "How rarely you die — early, while ahead, per minute.",
+    "teamplay": "Kill participation, objectives, crowd control, heals and "
+                "shields.",
+    "objectives": "Dragons, Heralds, Barons and tower damage.",
+    "consistency": "How steady your games are, and whether a loss throws "
+                   "off the next game.",
+}
 DEFAULT_CONFIG = Path(__file__).with_name("weights.toml")
 UNIFORM_VAR = 100.0 ** 2 / 12     # variance of a percentile under "no effect"
 PRIOR_GAMES = 10                  # pseudo-games of population noise

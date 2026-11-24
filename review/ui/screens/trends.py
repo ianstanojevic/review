@@ -6,6 +6,7 @@ from __future__ import annotations
 import tkinter as tk
 
 from ...analysis import fmt_value
+from ...analysis.metrics import help_text
 from ...theme import widgets as W
 from ...theme.tokens import (BAD, DIM, EDGE_HI, F_LG_B, F_SM, FG, GHOST,
                              GOOD, PANEL)
@@ -119,7 +120,8 @@ class TrendsScreen(Screen):
                         "—", DIM),
                 "a": vs_avg(tr.key, tr.first_third),
                 "z": vs_avg(tr.key, tr.last_third)},
-                marked=tr.key == self.key, data=tr))
+                marked=tr.key == self.key, data=tr,
+                tip=help_text(tr.key)))
         tab.set_rows(rows)
         tab.pack(fill="x")
         p, _ = panel(right, "OVERALL PERFORMANCE", EDGE_HI, right="",

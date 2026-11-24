@@ -6,6 +6,7 @@ from __future__ import annotations
 import math
 import tkinter as tk
 
+from ...analysis.metrics import HELP
 from ...analysis import ROLE_LABEL, fmt_value
 from ...theme import anim
 from ...theme import widgets as W
@@ -170,6 +171,12 @@ class OverviewScreen(Screen):
             tk.Label(t, text="%s %s · n=%d" % (group_name(res),
                                                fmt_value(k, peer), m.n),
                      bg=PANEL2, fg=DIM, font=F_XS).pack(anchor="w")
+            tip = HELP.get(k)
+            if tip:
+                for w in (t, *t.winfo_children()):
+                    w.bind("<Enter>", lambda e, s=tip: self.tip.show(
+                        e.x_root, e.y_root, s))
+                    w.bind("<Leave>", lambda e: self.tip.hide())
         for c in range(2):
             self.keys.grid_columnconfigure(c, weight=1, minsize=px(150))
         self.key_n.configure(text="vs %s · role-matched" % (
@@ -183,9 +190,10 @@ class OverviewScreen(Screen):
             clear(box)
             lbl.configure(text="%d found" % len(items))
             if not items:
-                empty_note(box, "Nothing passes the confidence bar yet "
-                           "(needs ≥ 20 games, |z| ≥ 1.96, effect d ≥ 0.15). "
-                           "More games will sharpen this.")
+                empty_note(box, "Nothing stands out clearly yet. A "
+                           "strength or weakness needs at least 20 games and "
+                           "a difference too big to be chance — more games "
+                           "will sharpen this.")
             for f in items:
                 finding_card(box, f, col, app=self.app,
                              group=group_name(res))

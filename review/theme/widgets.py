@@ -726,6 +726,7 @@ class Row:
     marked: bool = False              # ◆ + gold text in the first text col
     data: Any = None
     extra: dict = field(default_factory=dict)
+    tip: str | None = None            # hover text for the whole row
 
 
 KEEP_CAPS = {"WR", "KDA", "CS", "GD", "XP", "VS", "W", "L", "K", "D", "A",
@@ -804,7 +805,9 @@ class Table(tk.Frame):
         self.body.bind("<Configure>", self._on_body_configure)
         self.hdr.bind("<Configure>", lambda e: self.draw_header())
         self.body.bind("<Motion>", self._motion)
-        self.body.bind("<Leave>", lambda e: self._set_hover(-1))
+        self.body.bind("<Leave>", lambda e: (
+            self._set_hover(-1), self.tooltip and getattr(
+                self, "_tip_on", False) and self.tooltip.hide()))
         self.body.bind("<Button-1>", self._click)
         self._imgs: list = []
 
@@ -1048,7 +1051,19 @@ class Table(tk.Frame):
         c.configure(cursor="hand2" if (i >= 0 and self.on_click) else "")
 
     def _motion(self, e):
-        self._set_hover(self._row_at(e.y))
+        i = self._row_at(e.y)
+        changed = i != self.hover
+        self._set_hover(i)
+        if self.tooltip is None:
+            return
+        tip = self.view[i].tip if i >= 0 else None
+        if tip:
+            if changed or not getattr(self, "_tip_on", False):
+                self.tooltip.show(e.x_root, e.y_root, tip)
+                self._tip_on = True
+        elif getattr(self, "_tip_on", False):
+            self.tooltip.hide()
+            self._tip_on = False
 
     def _click(self, e):
         i = self._row_at(e.y)
