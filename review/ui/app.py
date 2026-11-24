@@ -383,7 +383,7 @@ class App:
         self._mount(box)
         wrap = tk.Frame(box, bg=DARK_BG)
         wrap.pack(pady=(px(60), 0))
-        inner, _ = panel(wrap, "ANALYSING", EDGE_HI, expand=False, fit=True,
+        inner, _ = panel(wrap, "ANALYZING", EDGE_HI, expand=False, fit=True,
                          min_width=420)
         ref = (" vs " + _level_label(self.reference)) if self.reference \
             else ""
@@ -574,7 +574,7 @@ class App:
                 self.player = {"puuid": cached, "riot_id": riot_id,
                                "region": reg.code}
                 self._show_bars()
-                self._show_busy("Analysing %s…" % riot_id)
+                self._show_busy("Analyzing %s…" % riot_id)
                 self.reanalyze()
             else:
                 self._show_loader(riot_id, reg.code)

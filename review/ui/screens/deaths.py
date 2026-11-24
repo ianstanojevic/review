@@ -49,7 +49,7 @@ class DeathsScreen(Screen):
         pm = getattr(res, "peer_means", {}) or {}
         items = [("PER GAME", mean_pm("deaths", d.per_game), FG,
                   ("%s %.1f" % (avg_word(res), pm["deaths"]))
-                  if "deaths" in pm else "mean ± 90% CI"),
+                  if "deaths" in pm else "average ± likely range"),
                  ("FOLLOWED BY ENEMY OBJECTIVE", rate_pm(
                      d.followed_by_objective), BAD
                   if d.followed_by_objective.p > 0.3 else FG,

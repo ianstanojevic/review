@@ -356,6 +356,16 @@ def avg_word(res) -> str:
     return "%s avg" % (getattr(res, "reference_label", None) or "peer")
 
 
+def avg_text(key, v) -> str:
+    """A comparison-group average as shown: lane differences (you minus
+    your opponent) average out to zero by definition, so '+0' / '+0.0'
+    read as 'even' instead of looking like a number to beat."""
+    from ...analysis import fmt_value
+    if "_diff_" in key and v == v and             fmt_value(key, abs(v)).lstrip("+") == fmt_value(key, 0.0).lstrip("+"):
+        return "even"
+    return fmt_value(key, v)
+
+
 def avg_strip(parent, res, items, bg=PANEL):
     """One line of comparison-group averages above a table:
     [(label, metric key or None, formatted value or None)]."""
@@ -366,7 +376,7 @@ def avg_strip(parent, res, items, bg=PANEL):
         if text is None:
             if key not in pm:
                 continue
-            text = fmt_value(key, pm[key])
+            text = avg_text(key, pm[key])
         parts.append("%s %s" % (label, text))
     if not parts:
         return

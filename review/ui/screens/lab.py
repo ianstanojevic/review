@@ -49,8 +49,8 @@ class LabScreen(Screen):
 
     # ------------------------------------------------------------- tabs
     def _lane(self, b, res):
-        p, _ = panel(b, "1 · LANE CURVES", EDGE_HI, right="wins vs losses, "
-                     "90% CI", expand=False)
+        p, _ = panel(b, "1 · LANE CURVES", EDGE_HI, right="wins vs losses · "
+                     "shaded = likely range", expand=False)
         for col, metric in zip(grid(p, 3, bg=PANEL), ("gold", "cs", "xp")):
             C.lane_curve(col, self, res, metric, height=180)
         p, _ = panel(b, "3 · DISTRIBUTIONS", EDGE_HI, right="per game, you "
@@ -81,7 +81,7 @@ class LabScreen(Screen):
             empty_note(p, "No lane opponent repeats yet.")
 
     def _trends(self, b, res):
-        p, _ = panel(b, "2 · ROLLING TRENDS", EDGE_HI, right="20-game "
+        p, _ = panel(b, "2 · TRENDS", EDGE_HI, right="20-game "
                      "windows · patches shaded · role-adjusted verdicts",
                      expand=False)
         ts = res.trends

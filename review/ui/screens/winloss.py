@@ -28,7 +28,7 @@ class WinLossScreen(Screen):
         ds = res.deciders
         nw, nl = res.record.wins, res.record.n - res.record.wins
         p, _ = panel(b, "WHAT DECIDES YOUR GAMES", EDGE_HI,
-                     right="%d wins · %d losses · Cohen's d, 90%% CI" % (
+                     right="%d wins · %d losses · longest bars matter most" % (
                          nw, nl), expand=False)
         items = []
         for d in ds:
@@ -39,10 +39,10 @@ class WinLossScreen(Screen):
                 "%+.2f]" % (d.label, fmt_value(d.key, e.mean_a),
                             fmt_value(d.key, e.mean_b), e.n_a, e.n_b, e.d,
                             e.lo, e.hi)))
-        ch = chart_block(p, DivergingBars, "EFFECT SIZE (WINS − LOSSES)",
+        ch = chart_block(p, DivergingBars, "HOW MUCH EACH STAT DIFFERS IN WINS VS LOSSES",
                          height=max(160, 26 * len(items) + 40), tip=self.tip)
         ch.set(items=items, label_w=230,
-               xlabel="effect size d: how much higher the stat is in wins "
+               xlabel="gap: how much higher the stat is in wins "
                "than in losses")
         ch.meta("n=%d games" % res.n_games, T.deciders(res))
 
@@ -53,7 +53,10 @@ class WinLossScreen(Screen):
                 Col("w", "IN WINS", 9, "e"),
                 Col("l", "IN LOSSES", 9, "e"),
                 Col("bar", "", 16, kind="bars"),
-                Col("d", "d ± (90%)", 12, "e",
+                Col("d", "GAP", 12, "e",
+                    tip="How big the difference between your wins and "
+                    "losses is (0.2 small, 0.5 medium, 0.8+ large); ± is how "
+                    "sure it is.",
                     sort=lambda r: abs(r.data.effect.d))]
         t = Table(p, cols, rows_visible=min(len(ds), 14) or 3,
                   tooltip=self.tip, default_sort="d")

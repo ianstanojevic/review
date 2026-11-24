@@ -16,7 +16,7 @@ from ...theme.tokens import (BAD, DIM, EDGE_HI, F_LG_B, F_NUM, F_SM,
                              F_XS, F_XS_B, FG, GHOST, GOOD, PANEL, PANEL2,
                              SP_M, SP_S, SP_XS, signed_color)
 from ...theme.widgets import px
-from .base import (Screen, clear, empty_note, fifty_means, finding_card,
+from .base import (avg_text, Screen, clear, empty_note, fifty_means, finding_card,
                    group_name, panel, peer_word, pm_text, radar_axes, row,
                    score_pm)
 
@@ -69,9 +69,9 @@ class OverviewScreen(Screen):
         self.score_pm = tk.Label(sl, text="", bg=PANEL, fg=DIM, font=F_SM)
         self.score_pm.pack(side="left", anchor="s", pady=(0, px(6)),
                            padx=(SP_XS, 0))
-        self.tip.bind(self.score, "Weighted mean of the 8 radar axes. 50 = a "
-                      "typical same-role player in your games; ± is the 90% "
-                      "bootstrap interval.")
+        self.tip.bind(self.score, "The average of your 8 radar scores. 50 = "
+                      "a typical player in your role; ± is how far it could "
+                      "be off with this many games.")
 
         mid = row(b, pady=(SP_M, 0))
         # key stats first (packed right) so the radar can never squeeze it
@@ -108,7 +108,7 @@ class OverviewScreen(Screen):
         r = res.record
         self.wr.configure(text="%.1f%%" % (100 * r.p) if r.n else "—",
                           fg=GOOD if r.p > 0.52 else BAD if r.p < 0.48 else FG)
-        self.wr_pm.configure(text="%s (90%%)" % pm_text(r))
+        self.wr_pm.configure(text=pm_text(r))
         self.split.set(r.p if r.n else None)
         self.games.configure(text="%d" % res.n_games)
         k = res.excluded.remakes
@@ -121,7 +121,7 @@ class OverviewScreen(Screen):
             anim.count_up(self.score, R.overall, "%.0f")
             self.score_pm.configure(text=score_pm(R))
             self.spark.set(ys=[m for _, m, _, _ in res.score_series],
-                           tip="Game score, rolling 20 games (n=%d)"
+                           tip="Game score, average of the last 20 games (n=%d)"
                            % res.n_games)
             ov = []
             if res.previous_radar:
@@ -131,7 +131,7 @@ class OverviewScreen(Screen):
             self.radar.peer_word = peer_word(res, role)
             self.radar.set_radar(radar_axes(R), ov)
             vs = res.reference_label
-            self.radar_n.configure(text="%sn=%d · 90%% CI%s" % (
+            self.radar_n.configure(text="%sn=%d%s" % (
                 "VS %s · " % vs.upper() if vs else "",
                 R.n_games, " · LOW SAMPLE" if R.insufficient else ""),
                 fg=GOOD if vs else DIM)
@@ -169,7 +169,7 @@ class OverviewScreen(Screen):
             tk.Label(t, text=fmt_value(k, m.mean), bg=PANEL2, fg=col,
                      font=("Segoe UI", 12, "bold")).pack(anchor="w")
             tk.Label(t, text="%s %s · n=%d" % (group_name(res),
-                                               fmt_value(k, peer), m.n),
+                                               avg_text(k, peer), m.n),
                      bg=PANEL2, fg=DIM, font=F_XS).pack(anchor="w")
             tip = HELP.get(k)
             if tip:
@@ -179,7 +179,7 @@ class OverviewScreen(Screen):
                     w.bind("<Leave>", lambda e: self.tip.hide())
         for c in range(2):
             self.keys.grid_columnconfigure(c, weight=1, minsize=px(150))
-        self.key_n.configure(text="vs %s · role-matched" % (
+        self.key_n.configure(text="vs %s · same role" % (
             res.reference_label or "players in your games"))
 
     def _findings(self, res):

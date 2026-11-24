@@ -418,7 +418,7 @@ class CompareScreen(Screen):
 
     def _standings(self, parent, players):
         p, _ = panel(parent, "STANDINGS", EDGE_HI, expand=False,
-                     right="overall score · 90% range")
+                     right="overall score · line = likely range")
         order = sorted(players, key=lambda t: -t[2].radar.overall)
         my_place = next(i for i, t in enumerate(order) if t is players[0])
         top = max(t[2].radar.overall for t in order)

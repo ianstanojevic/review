@@ -28,7 +28,7 @@ class LaneScreen(Screen):
         b = self.box
         # --- diffs table: roles first, then champions (3+ games)
         p, _ = panel(b, "LANE PHASE VS YOUR DIRECT OPPONENT", EDGE_HI,
-                     right="mean ± 90% CI", expand=False)
+                     right="average ± likely range", expand=False)
         avg_strip(p, res, [("dies before 14:00", "early_death", None),
                            ("solo deaths", "solo_deaths", None),
                            ("deaths <14:00", "deaths_pre14", None),
@@ -45,7 +45,7 @@ class LaneScreen(Screen):
         cols += [Col("ed", "DIES <14:00", 13, "e",
                      sort=lambda r: r.data.early_death_rate.p,
                      tip="Share of games with at least one death before "
-                     "14:00 (Wilson 90%)"),
+                     "14:00"),
                  Col("solo", "SOLO DEATHS", 12, "e",
                      sort=lambda r: r.data.solo_deaths.mean)]
         rows = []

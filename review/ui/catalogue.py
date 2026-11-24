@@ -79,7 +79,7 @@ def lane_curve(parent, s, res, metric, height=190):
            xfmt=lambda v: "%d:00" % v, yfmt=f, baseline=0.0,
            baseline_label="even", xticks=[0, 5, 10, 15, 20])
     n = max((p.n for p in c["all"]), default=0)
-    ch.meta("n=%d games · 90%% CI bands" % n, T.lane_curve(res, metric))
+    ch.meta("n=%d games · shaded = likely range" % n, T.lane_curve(res, metric))
     return ch
 
 
@@ -88,7 +88,7 @@ def wr_bars(parent, s, res, key, title, take, height=170):
     ch = chart_block(parent, BarChart, title, height=height, tip=s.tip)
     ch.set(bins=rate_bins(bins), baseline=0.5, baseline_label="50%",
            ylabel="win rate", xlabel=WR_X.get(key, ""))
-    ch.meta("n=%d games · Wilson 90%%" % sum(b.rate.n for b in bins),
+    ch.meta("n=%d games · whiskers = likely range" % sum(b.rate.n for b in bins),
             take(res))
     return ch
 
@@ -194,8 +194,8 @@ def score_trend(parent, s, res, height=190):
            regions=patch_regions(res), xfmt=lambda v: "%d" % v, yfmt=f,
            baseline=50.0, baseline_label="50 = typical %s" % (
                res.reference_label or "peer"))
-    ch.meta("n=%d games · 90%% CI" % res.n_games,
-            "Game score = weighted mean of the axis percentiles in each game;"
+    ch.meta("n=%d games · shaded = likely range" % res.n_games,
+            "Game score = the average of your radar scores in each game;"
             " %s." % fifty_means(res))
     return ch
 
@@ -227,7 +227,7 @@ def patch_scores(parent, s, res, height=170):
         ranked[0].label, ranked[0].value, ranked[0].n, ranked[-1].label,
         ranked[-1].value, ranked[-1].n)) if len(ranked) >= 2 else \
         "Needs 5+ games on at least two patches to rank them."
-    ch.meta("n=%d games · 90%% CI" % res.n_games, take)
+    ch.meta("n=%d games · whiskers = likely range" % res.n_games, take)
     return ch
 
 
@@ -260,7 +260,7 @@ def lp_history(parent, s, res, height=170):
         ch.set(series=[])
         ch.meta("n=%d snapshot%s" % (len(pts), "" if len(pts) == 1 else "s"),
                 "Riot's API has no LP history, so REVIEW saves a rank "
-                "snapshot every time you analyse this player. The line builds "
+                "snapshot every time you analyze this player. The line builds "
                 "up over future runs.")
         return ch
     import datetime as dt
@@ -296,13 +296,13 @@ def champion_scatter(parent, s, res, height=260, label_top=10):
     ch = chart_block(parent, Scatter, "CHAMPIONS — GAMES VS WIN RATE",
                      height=height, tip=s.tip)
     med = sorted(c.games for c in rows)[len(rows) // 2] if rows else 0
-    ch.set(ylabel="win rate (bars = 90% range)",
+    ch.set(ylabel="win rate (line = likely range)",
            points=pts, ylim=(0, 1), hline=0.5, vline=med,
            quadrants=("HIDDEN GEMS", "COMFORT PICKS", "UNPROVEN",
                       "PROBLEM PICKS"), xlabel="games played",
            label_top=label_top)
-    ch.meta("%d champions with 2+ games · bubble = avg score · bars = "
-            "Wilson 90%%" % len(rows), T.champions(res))
+    ch.meta("%d champions with 2+ games · bigger bubble = higher score"
+            % len(rows), T.champions(res))
     return ch
 
 
@@ -333,7 +333,7 @@ def session_bars(parent, s, res, which, height=170):
            ylabel="win rate",
            xlabel="game number in a session" if which == "number"
            else "losses in a row before the game")
-    ch.meta("n=%d games · %d sessions (gap > 60 min) · Wilson 90%%" % (
+    ch.meta("n=%d games · %d sessions (1 h+ break = new session)" % (
         sum(b.rate.n for b in bins), ss.n_sessions), take)
     return ch
 
@@ -393,7 +393,7 @@ def item_bars(parent, s, res, height=170):
     ch.set(bins=rate_bins(it.bins), baseline=0.5, baseline_label="50%",
            ylabel="win rate",
            xlabel="minute your first legendary item finished")
-    ch.meta("n=%d games with a legendary · Wilson 90%%" % len(it.points),
+    ch.meta("n=%d games with a legendary item" % len(it.points),
             T.items(res))
     return ch
 

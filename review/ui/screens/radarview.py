@@ -107,7 +107,7 @@ class RadarScreen(Screen):
         self.radar.selected = self.axis
         self.radar.peer_word = peer_word(res, res.dist_role)
         vs = res.reference_label
-        self.n_lbl.configure(text="%sn=%d · overall %.0f %s · 90%% CI%s" % (
+        self.n_lbl.configure(text="%sn=%d · overall %.0f %s%s" % (
             "VS %s · " % vs.upper() if vs else "",
             R.n_games, R.overall, score_pm(R),
             " · LOW SAMPLE" if R.insufficient else ""),
@@ -417,7 +417,7 @@ class RadarScreen(Screen):
         tk.Label(head, text="%.0f" % a.score, bg=PANEL,
                  fg=score_color(a.score), font=("Georgia", 26, "bold")).pack(
                      side="left")
-        ci = "90%% CI %.0f–%.0f" % (a.lo, a.hi) if a.lo == a.lo else ""
+        ci = "likely %.0f–%.0f" % (a.lo, a.hi) if a.lo == a.lo else ""
         info = tk.Frame(head, bg=PANEL)
         info.pack(side="left", padx=(px(10), 0))
         tk.Label(info, text=ci, bg=PANEL, fg=FG, font=F_SM).pack(anchor="w")
@@ -425,12 +425,12 @@ class RadarScreen(Screen):
                  fg=DIM, font=F_XS).pack(
                 anchor="w")
         # sub-metrics
-        tk.Label(self.dd, text="SUB-METRICS (PERCENTILE VS %s)" % (
+        tk.Label(self.dd, text="WHAT THE SCORE IS MADE OF (0–100, 50 = TYPICAL %s)" % (
             group_name(res).upper()), bg=PANEL,
                  fg=DIM, font=F_XS_B).pack(anchor="w", pady=(px(10), px(2)))
         cols = [Col("m", "METRIC", 16, "w", stretch=True),
                 Col("you", "YOU", 6, "e"), Col("peer", group_name(res).upper(), 7, "e"),
-                Col("pct", "PCTL", 4, "e"),
+                Col("pct", "SCORE", 4, "e"),
                 Col("bar", "", 7, kind="bars")]
         t = Table(self.dd, cols, rows_visible=max(len(a.subs), 1),
                   tooltip=self.tip)
@@ -450,7 +450,7 @@ class RadarScreen(Screen):
         t.set_rows(rows)
         t.pack(fill="x")
         # over time
-        tk.Label(self.dd, text="OVER TIME (ROLLING 10 GAMES)", bg=PANEL,
+        tk.Label(self.dd, text="OVER TIME (AVERAGE OF THE LAST 10 GAMES)", bg=PANEL,
                  fg=DIM, font=F_XS_B).pack(anchor="w", pady=(px(10), 0))
         ch = LineChart(self.dd, self.tip, height=170)
         ch.pack(fill="x")
@@ -479,7 +479,7 @@ class RadarScreen(Screen):
                               "game score", width=2.2,
                               fmt=lambda v: "%.0f" % v))
         ch.set(xlabel="game (oldest → newest)",
-               ylabel="percentile vs %s, 10-game average" % group_name(res),
+               ylabel="score vs %s, average of 10 games" % group_name(res),
                series=ser, ylim=(0, 100), baseline=50.0,
                xfmt=lambda v: "%d" % v, yfmt=lambda v: "%.0f" % v)
         ch.set_meta(a.label.upper() + " OVER TIME", "n=%d" % a.n, "")

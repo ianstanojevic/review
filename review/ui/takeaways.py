@@ -114,10 +114,10 @@ def deciders(res) -> str:
     if not res.deciders:
         return "Not enough wins and losses yet."
     top = res.deciders[0]
-    s = "%s separates your wins from losses most (d = %+.2f)." % (
+    s = "%s separates your wins from losses most (gap %+.2f)." % (
         top.label, top.effect.d)
     if early and early[0] is not top:
-        s += " Strongest early signal: %s (d = %+.2f)." % (
+        s += " Strongest early signal: %s (gap %+.2f)." % (
             early[0].label, early[0].effect.d)
     return s
 

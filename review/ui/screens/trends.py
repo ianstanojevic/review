@@ -13,7 +13,7 @@ from ...theme.tokens import (BAD, DIM, EDGE_HI, F_LG_B, F_SM, FG, GHOST,
 from ...theme.widgets import Col, Row, Table, px
 from .. import catalogue as C
 from .. import takeaways as T
-from .base import (Screen, avg_word, clear, fit_wrap, grid, mean_pm,
+from .base import (avg_text, Screen, avg_word, clear, fit_wrap, grid, mean_pm,
                    panel)
 
 VERDICT_COL = {"improving": GOOD, "declining": BAD, "stable": FG,
@@ -115,7 +115,7 @@ class TrendsScreen(Screen):
             rows.append(Row({
                 "stat": tr.label,
                 "v": trend_cell(tr),
-                "avg": (fmt_value(tr.key, res.peer_means[tr.key])
+                "avg": (avg_text(tr.key, res.peer_means[tr.key])
                         if tr.key in getattr(res, "peer_means", {}) else
                         "—", DIM),
                 "a": vs_avg(tr.key, tr.first_third),

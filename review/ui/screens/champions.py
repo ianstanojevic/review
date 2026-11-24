@@ -60,7 +60,7 @@ class ChampionsScreen(Screen):
                 Col("n", "GAMES", 6, "e",
                     sort=lambda r: (r.data.games, -r.extra["i"])),
                 Col("wr", "WR ±", 9, "e", sort=lambda r: r.data.rate.p,
-                    tip="Win rate ± half the Wilson 90% interval"),
+                    tip="Win rate; ± is how far it could be off with this few games"),
                 Col("kda", "KDA", 6, "e", sort=lambda r: r.data.kda),
                 Col("cs", "CS/MIN", 7, "e",
                     sort=lambda r: r.data.cs_per_min.mean),
