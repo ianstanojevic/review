@@ -462,6 +462,20 @@ class SlimScroll(tk.Canvas):
         self.target.yview_moveto(min(max(e.y / h - span / 2, 0.0), 1.0))
 
 
+import weakref
+
+_TABLES: "weakref.WeakSet" = weakref.WeakSet()
+
+
+def _page_scrolled():
+    for t in list(_TABLES):
+        try:
+            if t.winfo_exists() and t.winfo_ismapped():
+                t._ensure_rows()
+        except tk.TclError:
+            pass
+
+
 class ScrollArea(tk.Frame):
     """A vertically scrolling frame (``.body``) with a SlimScroll."""
 
@@ -480,6 +494,13 @@ class ScrollArea(tk.Frame):
             self._win, width=e.width))
         self.canvas._scrollable = True
         self.canvas._smooth = False      # see install_wheel
+        thumb = self.canvas.cget("yscrollcommand")
+
+        def on_scroll(first, last, _t=thumb):
+            if _t:
+                self.canvas.tk.call(_t, first, last)
+            _page_scrolled()             # lazily drawn tables catch up
+        self.canvas.configure(yscrollcommand=on_scroll)
 
     def to_top(self):
         self.canvas.yview_moveto(0)
@@ -766,6 +787,18 @@ class Table(tk.Frame):
             sb = SlimScroll(wrap, self.body)
             sb.configure(height=1)        # follow the body, never stretch it
             sb.pack(side="left", fill="y", padx=(px(4), 0))
+        # draw rows lazily as they scroll into view (Matches: 300 rows x 11
+        # columns took ~2 s to draw up front)
+        thumb = self.body.cget("yscrollcommand")
+
+        def on_scroll(first, last, _t=thumb):
+            if _t:
+                self.body.tk.call(_t, first, last)
+            self._ensure_rows()
+        self.body.configure(yscrollcommand=on_scroll)
+        self._drawn_rows: set[int] = set()
+        self._layout = None
+        _TABLES.add(self)
         self._redraw_job = None
         self._drawn_w = None
         self.body.bind("<Configure>", self._on_body_configure)
@@ -886,60 +919,87 @@ class Table(tk.Frame):
         if w <= 1:
             return
         self._drawn_w = w
-        xs = self._xs(w)
-        rh = self.row_h
-        for i, r in enumerate(self.view):
-            y0 = i * rh
-            top = self.top_highlight and i == 0
-            bg = TOP_BG if top else (PANEL if i % 2 else PANEL2)
-            c.create_rectangle(0, y0 + 1, w, y0 + rh - 1, fill=bg, width=0,
-                               tags=("bg", "bg%d" % i))
-            c.create_rectangle(0, y0 + 1, px(3), y0 + rh - 1,
-                               fill=EDGE_HI if top else bg, width=0,
-                               tags=("bar", "bar%d" % i))
-            cy = y0 + rh / 2
-            first_text = True
-            for col, (x0, x1) in zip(self.cols, xs):
-                v = r.cells.get(col.key)
-                if col.kind == "icon":
-                    img = self.icon_loader(r.icon, self.icon_px,
-                                           self.queue_redraw) if (
-                        self.icon_loader and r.icon) else None
-                    if img is not None:
-                        self._imgs.append(img)
-                        c.create_image(x0 + px(4), cy, image=img, anchor="w")
-                    else:
-                        c.create_rectangle(x0 + px(4), cy - self.icon_px / 2,
-                                           x0 + px(4) + self.icon_px,
-                                           cy + self.icon_px / 2, fill=HOVER,
-                                           width=0)
-                    continue
-                if v is None:
-                    continue
-                if col.kind == "bars":       # [(fraction, colour)…]
-                    bw = x1 - x0 - 2 * self.gap
-                    bx, bh = x0 + self.gap, px(9)
-                    for frac, colr in v:
-                        seg = bw * max(frac, 0)
-                        if seg >= 0.5:
-                            c.create_rectangle(bx, cy - bh / 2, bx + seg,
-                                               cy + bh / 2, fill=colr, width=0)
-                        bx += seg
-                    continue
-                if col.kind == "image":
-                    self._imgs.append(v)
-                    c.create_image((x0 + x1) / 2, cy, image=v)
-                    continue
-                text, colr = v if isinstance(v, tuple) else (str(v), FG)
-                anchor, x = self._anchor(col, x0, x1)
-                if first_text and col.align == "w" and r.marked:
-                    text, colr = "◆ " + text, EDGE_HI
-                first_text = first_text and col.align != "w"
-                text = self._fit_text(text, x1 - x0 - self.gap - px(2))
-                c.create_text(x, cy, text=text, anchor=anchor, fill=colr,
-                              font=F_SM)
-        c.configure(scrollregion=(0, 0, w, len(self.view) * rh))
+        self._layout = (w, self._xs(w))
+        self._drawn_rows = set()
+        c.configure(scrollregion=(0, 0, w, len(self.view) * self.row_h))
         self.hover = -1
+        self._ensure_rows()
+
+    def _ensure_rows(self, margin: int = 15):
+        """Draw the rows in (or near) view that aren't drawn yet."""
+        if self._layout is None or not self.view:
+            return
+        c, rh = self.body, self.row_h
+        h = max(c.winfo_height(), rh)
+        # the part of the canvas on screen: its own scroll position, cut
+        # to the window (a full-height table inside a scrolling page)
+        root = c.winfo_toplevel()
+        by, ry = c.winfo_rooty(), root.winfo_rooty()
+        v0 = max(0, ry - by)
+        v1 = min(h, ry + root.winfo_height() - by)
+        if v1 <= v0:                      # off screen: just the first rows
+            v0, v1 = 0, min(h, root.winfo_height())
+        top = c.canvasy(0)
+        i0 = max(int((top + v0) // rh) - margin, 0)
+        i1 = min(int((top + v1) // rh) + margin + 1, len(self.view))
+        for i in range(i0, i1):
+            if i not in self._drawn_rows:
+                self._drawn_rows.add(i)
+                self._draw_row(i)
+
+    def _draw_row(self, i):
+        c, rh = self.body, self.row_h
+        w, xs = self._layout
+        r = self.view[i]
+        y0 = i * rh
+        top = self.top_highlight and i == 0
+        bg = TOP_BG if top else (PANEL if i % 2 else PANEL2)
+        c.create_rectangle(0, y0 + 1, w, y0 + rh - 1, fill=bg, width=0,
+                           tags=("bg", "bg%d" % i))
+        c.create_rectangle(0, y0 + 1, px(3), y0 + rh - 1,
+                           fill=EDGE_HI if top else bg, width=0,
+                           tags=("bar", "bar%d" % i))
+        cy = y0 + rh / 2
+        first_text = True
+        for col, (x0, x1) in zip(self.cols, xs):
+            v = r.cells.get(col.key)
+            if col.kind == "icon":
+                img = self.icon_loader(r.icon, self.icon_px,
+                                       self.queue_redraw) if (
+                    self.icon_loader and r.icon) else None
+                if img is not None:
+                    self._imgs.append(img)
+                    c.create_image(x0 + px(4), cy, image=img, anchor="w")
+                else:
+                    c.create_rectangle(x0 + px(4), cy - self.icon_px / 2,
+                                       x0 + px(4) + self.icon_px,
+                                       cy + self.icon_px / 2, fill=HOVER,
+                                       width=0)
+                continue
+            if v is None:
+                continue
+            if col.kind == "bars":       # [(fraction, colour)…]
+                bw = x1 - x0 - 2 * self.gap
+                bx, bh = x0 + self.gap, px(9)
+                for frac, colr in v:
+                    seg = bw * max(frac, 0)
+                    if seg >= 0.5:
+                        c.create_rectangle(bx, cy - bh / 2, bx + seg,
+                                           cy + bh / 2, fill=colr, width=0)
+                    bx += seg
+                continue
+            if col.kind == "image":
+                self._imgs.append(v)
+                c.create_image((x0 + x1) / 2, cy, image=v)
+                continue
+            text, colr = v if isinstance(v, tuple) else (str(v), FG)
+            anchor, x = self._anchor(col, x0, x1)
+            if first_text and col.align == "w" and r.marked:
+                text, colr = "◆ " + text, EDGE_HI
+            first_text = first_text and col.align != "w"
+            text = self._fit_text(text, x1 - x0 - self.gap - px(2))
+            c.create_text(x, cy, text=text, anchor=anchor, fill=colr,
+                          font=F_SM)
 
     def _fit_text(self, text: str, avail: float) -> str:
         """``text``, cut with "…" if it is wider than ``avail`` px (a long
@@ -948,16 +1008,25 @@ class Table(tk.Frame):
             return text
         f = getattr(self, "_font", None) or tkfont.Font(font=F_SM)
         self._font = f
-        if f.measure(text) <= avail:
+        cw = getattr(self, "_cw", None)
+        if cw is None:
+            cw = self._cw = _char_widths(f)
+        # per-character widths, cached once: a Tk measure per cell cost
+        # ~2 ms, and the Matches/Stats lab tables have thousands of cells
+        est = sum(cw(ch) for ch in text)
+        if est <= avail:
             return text
-        lo, hi = 0, len(text)
-        while lo < hi:                       # longest prefix that fits
-            mid = (lo + hi + 1) // 2
-            if f.measure(text[:mid].rstrip() + "…") <= avail:
-                lo = mid
-            else:
-                hi = mid - 1
-        return text[:lo].rstrip() + "…" if lo else ""
+        if est - len(text) <= avail and f.measure(text) <= avail:
+            return text                      # kerning made it fit
+        ell = cw("…")
+        out, acc = "", 0.0
+        for ch in text:
+            if acc + cw(ch) + ell > avail:
+                break
+            out += ch
+            acc += cw(ch)
+        out = out.rstrip()
+        return out + "…" if out else ""
 
     def _row_at(self, y):
         i = int(self.body.canvasy(y) // self.row_h)
@@ -985,6 +1054,22 @@ class Table(tk.Frame):
         i = self._row_at(e.y)
         if i >= 0 and self.on_click:
             self.on_click(self.view[i])
+
+
+_CW_CACHE: dict = {}
+
+
+def _char_widths(font):
+    """A cached per-character width lookup for one Tk font."""
+    key = (str(font), font.actual("size"), font.actual("weight"))
+    table = _CW_CACHE.setdefault(key, {})
+
+    def width(ch):
+        w = table.get(ch)
+        if w is None:
+            w = table[ch] = font.measure(ch)
+        return w
+    return width
 
 
 def bar_cells(frac: float, color: str) -> list[tuple[float, str]]:
