@@ -74,13 +74,13 @@ def test_masked_built_in_key(datadir, monkeypatch):
     assert config.api_key() == "RGAPI-masked-1234"
 
 
-def test_key_source_order(tmp_path, monkeypatch):
-    from review import config
-    monkeypatch.setenv("REVIEW_DATA_DIR", str(tmp_path))
-    monkeypatch.delenv("REVIEW_RIOT_API_KEY", raising=False)
+def test_key_source_order(datadir, monkeypatch):
+    # (never stub config.setting: data_dir() reads REVIEW_DATA_DIR through
+    # it, and the key would be saved in the real %LOCALAPPDATA%\REVIEW)
+    monkeypatch.setattr(config, "_dotenv", lambda: {})
     monkeypatch.setattr(config, "built_in_key", lambda: "RGAPI-built")
-    monkeypatch.setattr(config, "setting", lambda *a, **k: None)
     monkeypatch.setattr(config, "_windows_user_env", lambda *a: None)
+    assert config.data_dir() == datadir
     assert config.key_source() == "built_in"
     config.save_key("RGAPI-mine")
     assert config.key_source() == "settings"
