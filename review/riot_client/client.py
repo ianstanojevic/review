@@ -68,6 +68,10 @@ class RiotClient:
         self._sleep = sleep
         self._count_lock = threading.Lock()
         self.requests_sent = 0
+        # monotonic time Riot became unreachable (network down, 5xx), None
+        # while requests succeed: lets the UI say "retrying" instead of
+        # looking frozen through a minute of back-off
+        self.trouble_since: float | None = None
 
     # -- plumbing -------------------------------------------------------
     def _pause(self, seconds: float, cancel: threading.Event | None):
@@ -104,11 +108,24 @@ class RiotClient:
                                                      self._timeout)
             except (urllib.error.URLError, OSError, TimeoutError) as e:
                 last_err = ServiceUnavailable(type(e).__name__)
+                self._mark_trouble()
                 self._pause(self._backoff(attempt), cancel)
                 continue
             if status == 200:
                 self._learn_limits(hdrs)
-                return body if raw else json.loads(body.decode("utf-8"))
+                if raw:
+                    self.trouble_since = None
+                    return body
+                try:
+                    data = json.loads(body.decode("utf-8"))
+                except (ValueError, UnicodeDecodeError):
+                    # a captive portal / proxy page answering 200
+                    last_err = ServiceUnavailable("unreadable response")
+                    self._mark_trouble()
+                    self._pause(self._backoff(attempt), cancel)
+                    continue
+                self.trouble_since = None
+                return data
             if status == 404:
                 raise NotFound()
             if status in (401, 403):
@@ -128,10 +145,15 @@ class RiotClient:
                 continue
             if status >= 500:
                 last_err = ServiceUnavailable("HTTP %d" % status)
+                self._mark_trouble()
                 self._pause(self._backoff(attempt), cancel)
                 continue
             raise RiotApiError("Riot API returned HTTP %d" % status, status)
         raise last_err
+
+    def _mark_trouble(self):
+        if self.trouble_since is None:
+            self.trouble_since = time.monotonic()
 
     @staticmethod
     def _backoff(attempt: int) -> float:

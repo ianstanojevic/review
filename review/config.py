@@ -107,6 +107,21 @@ def built_in_key() -> str | None:
         return None
 
 
+def key_source() -> str | None:
+    """Where api_key() gets its key: 'env', 'settings', 'built_in',
+    'dotenv' or None — so an error can say whose key stopped working."""
+    if os.environ.get("REVIEW_RIOT_API_KEY", "").strip():
+        return "env"
+    if saved_key():
+        return "settings"
+    if built_in_key():
+        return "built_in"
+    if (setting("REVIEW_RIOT_API_KEY") or setting("DRAFT_RIOT_API_KEY")
+            or _windows_user_env("DRAFT_RIOT_API_KEY")):
+        return "dotenv"
+    return None
+
+
 def api_key() -> str | None:
     """Lookup order: REVIEW_RIOT_API_KEY in the environment, the key saved
     in Settings, the key built into a release exe, a .env (project, or next

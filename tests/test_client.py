@@ -116,3 +116,32 @@ def test_no_adapt_when_pinned():
 def test_parse_limit_header():
     assert parse_limit_header("20:1,100:120") == ((20, 1.0), (100, 120.0))
     assert parse_limit_header("garbage") == ()
+
+
+def test_trouble_is_flagged_then_cleared():
+    c, _, _ = client([OSError("down"), (503, {}, {}), (200, {}, {"ok": 1})])
+    seen = []
+    orig = c._pause
+    c._pause = lambda s, cancel: (seen.append(c.trouble_since), orig(s, cancel))
+    assert c.match(EUW, "x") == {"ok": 1}
+    assert seen and all(t is not None for t in seen)
+    assert c.trouble_since is None
+
+
+class RawTransport(FakeTransport):
+    def __call__(self, url, headers, timeout):
+        self.calls.append((url, headers))
+        return self.responses.pop(0)
+
+
+def test_unreadable_200_is_retried_not_crashed():
+    clk = FakeClock()
+    lim = RateLimiter([(20, 1.0)], clock=clk, sleep=clk.sleep)
+    t = RawTransport([(200, {}, b"<html>captive portal</html>"),
+                      (200, {}, b'{"ok": 1}')])
+    c = RiotClient("RGAPI-test", lim, transport=t, sleep=clk.sleep)
+    assert c.match(EUW, "x") == {"ok": 1}
+    t2 = RawTransport([(200, {}, b"<html>") for _ in range(6)])
+    c2 = RiotClient("RGAPI-test", lim, transport=t2, sleep=clk.sleep)
+    with pytest.raises(ServiceUnavailable):
+        c2.match(EUW, "x")

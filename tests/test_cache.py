@@ -70,3 +70,20 @@ def test_player_region(tmp_path):
         c.upsert_player("p1", "Doublelift", "NA01", "NA")
         assert c.player_region("p1") == "NA"
         assert c.player_region("nobody") is None
+
+
+def test_damaged_cache_is_set_aside(tmp_path):
+    from review.cache import open_cache
+    db = tmp_path / "review.sqlite"
+    db.write_bytes(b"this is not a database" * 500)
+    c, moved = open_cache(db)
+    try:
+        assert moved and moved.startswith("review.sqlite.damaged-")
+        assert (tmp_path / moved).exists()
+        c.upsert_player("p", "A", "B", "EUW")       # fresh and usable
+        assert c.find_player("a", "b", "EUW") == "p"
+    finally:
+        c.close()
+    c2, moved2 = open_cache(db)                       # healthy: untouched
+    assert moved2 is None
+    c2.close()

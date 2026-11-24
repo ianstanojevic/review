@@ -111,11 +111,38 @@ class RankSnapshot:
     losses: int | None
 
 
+def open_cache(path: str | Path) -> tuple["Cache", str | None]:
+    """Open the cache; if the file is damaged (not a database, or a broken
+    schema), move it aside and start an empty one instead of refusing to
+    start. Returns (cache, name of the set-aside file or None)."""
+    try:
+        return Cache(path), None
+    except sqlite3.DatabaseError:
+        p = Path(path)
+        stamp = time.strftime("%Y%m%d-%H%M%S")
+        moved = p.with_name("%s.damaged-%s" % (p.name, stamp))
+        for suffix in ("", "-wal", "-shm"):
+            f = Path(str(p) + suffix)
+            if f.exists():
+                try:
+                    f.replace(Path(str(moved) + suffix))
+                except OSError:
+                    f.unlink(missing_ok=True)
+        return Cache(path), moved.name
+
+
 class Cache:
     def __init__(self, path: str | Path):
         self.path = str(path)
         self._lock = threading.RLock()
         self._db = sqlite3.connect(self.path, check_same_thread=False)
+        try:
+            self._init_schema()
+        except sqlite3.DatabaseError:
+            self._db.close()           # let open_cache move the file
+            raise
+
+    def _init_schema(self):
         with self._lock:
             if self.path != ":memory:":
                 self._db.execute("PRAGMA journal_mode=WAL")

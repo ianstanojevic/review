@@ -119,7 +119,8 @@ class App:
         self.tooltip = W.Tooltip(root)
         W.install_wheel(root)
         self.icons = IconStore(root)
-        self.cache = Cache(config.db_path())
+        from ..cache import open_cache
+        self.cache, self._cache_reset = open_cache(config.db_path())
         self.prefs = Prefs()
         # from disk right away (no network on the UI thread); the
         # background loader refreshes it and re-analyses only on change
@@ -154,6 +155,10 @@ class App:
         root.report_callback_exception = (
             lambda exc, val, tb: self._log(val))
         self.show_search()
+        if self._cache_reset:
+            self._trace("cache damaged, set aside as %s" % self._cache_reset)
+            self.set_status("Review's saved games were damaged and have been "
+                            "reset — they'll download again.", BAD)
         anim.fade_in(root)
 
     # ------------------------------------------------------- window place
@@ -596,18 +601,23 @@ class App:
         minutes: say so, with a countdown, instead of looking frozen."""
         try:
             secs = job.client.limiter.waiting_for()
+            since = getattr(job.client, "trouble_since", None)
         except Exception:
             return
-        if secs < 2:
+        if since is not None and time.monotonic() - since > 3:
+            msg = ("Can't reach Riot right now — retrying · %d s (check your "
+                   "internet connection)" % (time.monotonic() - since))
+        elif secs < 2:
             return
-        m, sec = divmod(int(secs + 0.5), 60)
-        msg = ("Waiting for Riot's rate limit · %d:%02d (personal keys allow "
-               "100 requests per 2 min)" % (m, sec))
+        else:
+            m, sec = divmod(int(secs + 0.5), 60)
+            msg = ("Waiting for Riot's rate limit · %d:%02d (personal keys "
+                   "allow 100 requests per 2 min)" % (m, sec))
         loader = getattr(self, "loader", None)
         if loader is not None and loader.winfo_exists():
             loader.rate_wait(msg)
         else:
-            base = self.status.cget("text").split(" · Waiting")[0]
+            base = self.status.cget("text").split(" · Waiting")[0]                 .split(" · Can't reach")[0]
             self.set_status(base + " · " + msg.split(" (")[0])
 
     def _partial(self, job):
@@ -825,6 +835,14 @@ class App:
         if isinstance(e, PlayerNotFound):
             title, msg = "PLAYER NOT FOUND", str(e) + " Check the spelling, " \
                 "the #TAG and the region."
+        elif isinstance(e, InvalidKey) and config.key_source() == "built_in":
+            # friends on a release build never chose a key: the dev-key
+            # advice ("expires every 24 h…") would only confuse them
+            title, msg = "API KEY", (
+                "The Riot API key built into this copy of Review has "
+                "stopped working. Ask whoever sent you Review for an updated "
+                "version — or paste your own free key from "
+                "developer.riotgames.com in ⚙ Settings.")
         elif isinstance(e, (InvalidKey, MissingKey)):
             title, msg = "API KEY", str(e)
         elif isinstance(e, RateLimited):
@@ -850,6 +868,9 @@ class App:
         btns.pack(anchor="w", pady=(SP_L, 0))
         if retry:
             W.button(btns, "Retry", retry).pack(side="left")
+        if isinstance(e, (InvalidKey, MissingKey)):
+            W.button(btns, "Open settings", self.show_settings).pack(
+                side="left", padx=(SP_S if retry else 0, 0))
         W.button(btns, "New search", self.show_search, fg=DIM).pack(
             side="left", padx=(SP_S, 0))
         self.set_status("")
