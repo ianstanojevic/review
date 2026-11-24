@@ -165,17 +165,38 @@ class CutPanel(tk.Frame):
         c.tag_lower("border")
 
 
+def hide_when_tight(row, left, right, gap=12):
+    """A header row with a title on the left and a note on the right: when
+    the row is too narrow for both, hide the note instead of letting it
+    print over the title (the full note stays in the tooltip/PNG)."""
+    def check(e=None):
+        w = row.winfo_width()
+        if w <= 1:
+            return
+        need = left.winfo_reqwidth() + right.winfo_reqwidth() + px(gap)
+        shown = right.winfo_manager() == "pack"
+        if need > w and shown:
+            right.pack_forget()
+        elif need <= w and not shown and right.cget("text"):
+            right.pack(side="right")
+    row.bind("<Configure>", check, add="+")
+    right.bind("<Configure>", lambda e: row.after_idle(check), add="+")
+    return check
+
+
 def section_title(parent, text: str, color: str = EDGE_HI,
                   bg: str = PANEL, right: str | None = None) -> tk.Label | None:
     """Coloured section header with an underline rule ("MY TEAM" style).
     Returns the right-hand label (for n / status text) if requested."""
     row = tk.Frame(parent, bg=bg)
     row.pack(fill="x")
-    tk.Label(row, text=text, bg=bg, fg=color, font=F_SM_B).pack(side="left")
+    title = tk.Label(row, text=text, bg=bg, fg=color, font=F_SM_B)
+    title.pack(side="left")
     rlbl = None
     if right is not None:
         rlbl = tk.Label(row, text=right, bg=bg, fg=DIM, font=F_XS)
         rlbl.pack(side="right")
+        hide_when_tight(row, title, rlbl)
     tk.Frame(parent, bg=color, height=2).pack(fill="x", pady=(SP_XS, SP_M))
     return rlbl
 

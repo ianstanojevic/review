@@ -413,6 +413,7 @@ class BarChart(Chart):
         slot = (x1 - x0) / len(bins)
         bw = min(slot * 0.62, px(46))
         yb = ax.Y(baseline)
+        boxes = []                     # value labels drawn (x0, y0, x1, y1)
         for i, b in enumerate(bins):
             cx = x0 + slot * (i + 0.5)
             pen.text(cx, y1 + px(10), b.label, F_XS, FG if b.n else DIM, "mm")
@@ -429,22 +430,37 @@ class BarChart(Chart):
                 for yy in (ylo, yhi):
                     pen.line([(cx - px(4), yy), (cx + px(4), yy)], FG, 1,
                              alpha=200)
-            # value label clear of both the bar and its whisker
+            # value label centred over (under) the bar and its whisker:
+            # beside the bar it ran into the next bar when slots were narrow
+            txt = vfmt(b.value)
+            tw = pen.measure(txt, F_XS_B)
             if b.value >= baseline:
                 top = min(yv, yb, ax.Y(min(b.hi, hi)) if _ok(b.hi) else yv)
-                pen.text(cx + bw / 2 + px(2), top - px(1), vfmt(b.value),
-                         F_XS_B, col, "lm")
+                ty = max(top - px(7), y0 + px(5))
             else:
                 bot = max(yv, yb, ax.Y(max(b.lo, lo)) if _ok(b.lo) else yv)
-                pen.text(cx + bw / 2 + px(2), bot + px(1), vfmt(b.value),
-                         F_XS_B, col, "lm")
+                ty = min(bot + px(7), y1 - px(5))
+            pen.text(cx, ty, txt, F_XS_B, col, "mm")
+            boxes.append((cx - tw / 2, ty - px(6), cx + tw / 2, ty + px(6)))
             tip = b.tip or "%s: %s  [%s – %s]  n=%d" % (
                 b.label, vfmt(b.value), vfmt(b.lo), vfmt(b.hi), b.n)
             self.hits.append((cx - slot / 2, y0, cx + slot / 2, y1, tip))
         pen.line([(x0, yb), (x1, yb)], EDGE_HI, 1, alpha=200, dash=(5, 4))
         if baseline_label:
-            pen.text(x1, yb - px(7), baseline_label, F_XS,
-                     EDGE_HI, "rm")
+            # right end of the line, else the left end, whichever no value
+            # label covers; a bare "50%" the y axis already shows is dropped
+            lw = pen.measure(baseline_label, F_XS)
+            ly = yb - px(7)
+            spots = [(x1 - lw, x1, "rm", x1), (x0 + px(3), x0 + px(3) + lw,
+                                               "lm", x0 + px(3))]
+            free = [s for s in spots if not any(
+                bx0 < s[1] and bx1 > s[0] and by0 < ly + px(6) and
+                by1 > ly - px(6) for bx0, by0, bx1, by1 in boxes)]
+            if free:
+                _, _, anc, x = free[0]
+                pen.text(x, ly, baseline_label, F_XS, EDGE_HI, anc)
+            elif baseline_label != yfmt(baseline):
+                pen.text(x1, ly, baseline_label, F_XS, EDGE_HI, "rm")
 
 
 # ------------------------------------------------------- diverging bars
@@ -510,6 +526,7 @@ class Distribution(Chart):
     """Your per-game values vs the peer distribution (histograms on shared
     bins, normalised to share of games) with both medians marked."""
     margins = (40, 18, 12, 24)
+    ytitle_extra = 14                 # axis title above the median legend
 
     def draw(self, pen, w, h, mine: list[float], peers: list[float],
              fmt=lambda v: "%.1f" % v, bins: int = 14, label_me="You",
@@ -552,9 +569,15 @@ class Distribution(Chart):
                                (med(mine), GOOD, label_me, len(mine))):
             X = ax.X(min(max(v, lo), hi))
             pen.line([(X, y0), (X, y1)], col, 1.5, dash=(4, 3))
-        pen.text(x1, y0 - px(8), "■ %s median %s (n=%d)   ■ %s median %s "
-                 "(n=%d)" % (label_me, fmt(med(mine)), len(mine), label_peers,
-                             fmt(med(peers)), len(peers)), F_XS, DIM, "rm")
+        # legend, right-aligned above the plot, squares in the bar colours
+        parts = [("middle game: ", None), ("■ ", GOOD),
+                 ("%s %s   " % (label_me, fmt(med(mine))), None),
+                 ("■ ", GHOST), ("%s %s" % (label_peers, fmt(med(peers))),
+                                 None)]
+        x = x1 - sum(pen.measure(t, F_XS) for t, _ in parts)
+        for t, col in parts:
+            pen.text(x, y0 - px(8), t, F_XS, col or DIM, "lm")
+            x += pen.measure(t, F_XS)
 
 
 # ---------------------------------------------------------------- scatter
@@ -622,10 +645,36 @@ class Scatter(Chart):
             self.hits.append((X - px(p.r) - 2, Y - px(p.r) - 2,
                               X + px(p.r) + 2, Y + px(p.r) + 2,
                               p.tip or p.label))
+        # labels: right of the bubble, else left, above or below — never on
+        # top of another label or a quadrant title ("Aphelios" and "Xayah"
+        # at the same spot printed over each other); no free spot = hover
+        taken = []
+        if quadrants:
+            for txt, x, y, a in ((quadrants[0], x0 + px(6), y0, "l"),
+                                 (quadrants[1], x1 - px(6), y0, "r"),
+                                 (quadrants[2], x0 + px(6), y1 - px(14), "l"),
+                                 (quadrants[3], x1 - px(6), y1 - px(14), "r")):
+                tw = pen.measure(txt, F_XS_B)
+                bx = x if a == "l" else x - tw
+                taken.append((bx, y, bx + tw, y + px(16)))
         for p in sorted(points, key=lambda p: -p.r)[:label_top]:
-            if p.label:
-                pen.text(ax.X(p.x) + px(p.r) + px(4), ax.Y(p.y), p.label,
-                         F_XS, FG, "lm")
+            if not p.label:
+                continue
+            X, Y, r = ax.X(p.x), ax.Y(p.y), px(p.r)
+            tw, th = pen.measure(p.label, F_XS), px(12)
+            spots = [(X + r + px(4), Y, "lm"), (X - r - px(4), Y, "rm"),
+                     (X, Y - r - px(8), "mm"), (X, Y + r + px(8), "mm")]
+            for sx, sy, anc in spots:
+                bx0 = sx if anc == "lm" else sx - tw if anc == "rm"                     else sx - tw / 2
+                box = (bx0, sy - th / 2, bx0 + tw, sy + th / 2)
+                if box[0] < x0 or box[2] > x1 or box[1] < y0 or box[3] > y1:
+                    continue
+                if any(box[0] < t[2] and box[2] > t[0] and box[1] < t[3]
+                       and box[3] > t[1] for t in taken):
+                    continue
+                taken.append(box)
+                pen.text(sx, sy, p.label, F_XS, FG, anc)
+                break
 
 
 # ---------------------------------------------------------------- heatmap

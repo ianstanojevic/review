@@ -96,9 +96,11 @@ def chart_block(parent, chart_cls, title: str, height=200, bg=PANEL,
     """Caption row (title left, n right) + chart + takeaway line."""
     head = tk.Frame(parent, bg=bg)
     head.pack(fill="x", pady=(SP_M, SP_XS))
-    tk.Label(head, text=title, bg=bg, fg=DIM, font=F_XS_B).pack(side="left")
+    tl = tk.Label(head, text=title, bg=bg, fg=DIM, font=F_XS_B)
+    tl.pack(side="left")
     nlbl = tk.Label(head, text="", bg=bg, fg=DIM, font=F_XS)
     nlbl.pack(side="right")
+    W.hide_when_tight(head, tl, nlbl)
     ch = chart_cls(parent, tip, height=height, **kw)
     ch.pack(fill="x")
     # the one-line takeaway is kept for PNG exports only — on screen the
