@@ -21,6 +21,7 @@ class SettingsDialog(tk.Toplevel):
         self.configure(bg=DARK_BG)
         self.resizable(False, False)
         self.transient(app.root)
+        self.bind("<Escape>", lambda e: self.destroy())
         try:
             self.attributes("-alpha", 0.0)
         except tk.TclError:

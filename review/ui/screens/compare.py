@@ -311,12 +311,33 @@ class CompareScreen(Screen):
                     side="left", padx=(px(6), 0))
             res = (o or {}).get("res") if o else self.me
             sub = status
+            few = False
             if res is not None and status in ("ready", "you"):
                 sub = "%s · %d games" % (self._rank(res), res.n_games)
+                if res.radar is not None and res.radar.insufficient:
+                    few = True
+                    sub = "%s · only %d games — rough" % (
+                        self._rank(res), res.n_games)
             tk.Label(c, text=sub, bg=PANEL2,
                      fg=BAD if status.startswith(("not found", "no games",
-                                                  "Riot")) else DIM,
+                                                  "Riot")) else
+                     EDGE_HI if few else DIM,
                      font=F_XS).pack(side="left", padx=(px(8), 0))
+            if o is not None and o.get("puuid"):
+                # click a friend's card: open their whole analysis
+                def open_full(e, o=o):
+                    self.app.view = "overview"
+                    self.app.nav.select("overview", fire=False)
+                    self.app.fetch(o["riot_id"], o.get("region") or
+                                   self.app.player["region"])
+                for w in c.winfo_children():
+                    w.bind("<Button-1>", open_full)
+                    w.configure(cursor="hand2")
+                c.bind("<Button-1>", open_full)
+                c.configure(cursor="hand2")
+                c.bind("<Enter>", lambda e, n=o["riot_id"]: self.tip.show(
+                    e.x_root, e.y_root, "Open %s's full analysis" % n))
+                c.bind("<Leave>", lambda e: self.tip.hide())
             if o is not None:
                 x = tk.Label(c, text="×", bg=PANEL2, fg=DIM, font=F_SM_B,
                              cursor="hand2")

@@ -121,3 +121,28 @@ def test_every_view_copes_with_thin_results(app, case):
         app.navigate(key)
         pump(app, 1.0)
         assert not app.errors, (case, key, app.errors)
+
+
+def test_keyboard_shortcuts_and_remembered_tab(app):
+    res = analyze(synth_games(40, boost=0.3), ME, Filter(), load_config(),
+                  compute_ci=False)
+    app.player = {"puuid": ME, "riot_id": "Test#T", "region": "EUW"}
+    app._show_bars()
+    app._on_result(app.gen, res, None, False)
+    pump(app, 1.0)
+    app.root.focus_force()
+    pump(app, 0.2)
+
+    def key(keysym, shift=False):
+        w = app.root.focus_get() or app.root
+        w.event_generate("<KeyPress>", keysym=keysym,
+                         state=0x4 | (0x1 if shift else 0))
+        pump(app, 0.8)
+    key("4")                                   # Ctrl+4: 4th tab
+    assert app.view == "trends"
+    # (Tk on Windows drops simulated Tab events, so Ctrl+Tab can't be
+    # driven here; Ctrl+PageDown goes through the same handler)
+    key("Next")                                # Ctrl+PageDown: next tab
+    assert app.view == "winloss"
+    assert app.prefs.get("view") == "winloss"    # remembered next start
+    assert not app.errors, app.errors

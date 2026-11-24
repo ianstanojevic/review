@@ -137,7 +137,10 @@ class App:
         self.reference = self.prefs.get("reference")   # None|diamond|master
         self.bench_job = None
         self.result = None
-        self.view = "overview"
+        self.view = self.prefs.get("view", "overview")
+        if self.view not in VIEW_LABEL:
+            self.view = "overview"
+        self._synced_at: float | None = None   # last finished download
         self.job: SyncJob | None = None
         self._reveal_next = True     # next built screen gets the reveal
         self.gen = 0
@@ -154,6 +157,8 @@ class App:
         # a windowed exe has no stderr: log every callback exception
         root.report_callback_exception = (
             lambda exc, val, tb: self._log(val))
+        self._install_shortcuts()
+        self.root.after(30000, self._tick_updated)
         self.show_search()
         if self._cache_reset:
             self._trace("cache damaged, set aside as %s" % self._cache_reset)
@@ -182,11 +187,21 @@ class App:
         self.bars = tk.Frame(outer, bg=DARK_BG)
         nav = tk.Frame(self.bars, bg=DARK_BG)
         nav.pack(fill="x", pady=(SP_L, SP_XS))
-        self.nav = W.TabRow(nav, "VIEW", VIEWS, "overview",
+        self.nav = W.TabRow(nav, "VIEW", VIEWS, self.view,
                             on_change=self.navigate)
         self.nav.pack(side="left")
         ns = W.button(nav, "New search", self.show_search, fg=DIM, font=F_SM)
         ns.pack(side="right")
+        rf = W.button(nav, "↻ Refresh", self.refresh, fg=DIM, font=F_SM)
+        rf.pack(side="right", padx=(0, SP_S))
+        cp = W.button(nav, "Copy view", self.copy_view, fg=DIM, font=F_SM)
+        cp.pack(side="right", padx=(0, SP_S))
+        for b, tip in ((rf, "Fetch new games for this player  (F5)"),
+                       (cp, "Copy what you see as a picture, ready to paste "
+                        "into Discord  (Ctrl+Shift+C)")):
+            b.bind("<Enter>", lambda e, t=tip: self.tooltip.show(
+                e.x_root, e.y_root, t), add="+")
+            b.bind("<Leave>", lambda e: self.tooltip.hide(), add="+")
         flt = tk.Frame(self.bars, bg=DARK_BG)
         flt.pack(fill="x", pady=(SP_XS, SP_M))
         from ..theme.roleicons import role_photo_alpha
@@ -406,6 +421,8 @@ class App:
 
     def navigate(self, name, **kw):
         self.view = name
+        if self.prefs.get("view") != name:
+            self.prefs.set("view", name)
         self.nav.select(name, fire=False)
         if self.result is None or not self.player:
             return
@@ -647,6 +664,7 @@ class App:
         res = job.result
         if res.cancelled:
             return
+        self._synced_at = time.time()
         self.player = {"puuid": res.puuid, "riot_id": res.riot_id,
                        "region": res.region}
         self._show_bars()
@@ -821,14 +839,101 @@ class App:
         job_running = self.job and self.job._thread and \
             self.job._thread.is_alive()
         if not job_running:
-            self.set_status("Done · %d games · %s · %s%s" % (
+            self.set_status("Done · %d games · %s · %s%s%s" % (
                 res.n_games, " + ".join(QUEUE_LABEL[q] for q in
                                         QUEUES[self.queue_key]),
                 self.player["region"],
                 " · vs %s" % res.reference_label if res.reference_label
-                else ""))
+                else "", self._updated_text()))
         elif partial:
             self.set_status(self.status.cget("text") + " · partial results")
+
+    def _updated_text(self) -> str:
+        if not self._synced_at:
+            return ""
+        m = int((time.time() - self._synced_at) // 60)
+        return " · updated %s" % ("just now" if m < 1 else
+                                   "%d min ago" % m if m < 60 else
+                                   "%d h ago" % (m // 60))
+
+    def _tick_updated(self):
+        """Keep "updated N min ago" current while the app sits idle."""
+        try:
+            txt = self.status.cget("text")
+            if txt.startswith("Done ·") and " · updated " in txt:
+                self.set_status(txt.split(" · updated ")[0] +
+                                self._updated_text())
+            self.root.after(30000, self._tick_updated)
+        except tk.TclError:
+            pass
+
+    # -------------------------------------------------------- shortcuts
+    def refresh(self):
+        """Fetch only new games for the current player (F5)."""
+        if self.player and not (self.job and self.job._thread
+                                and self.job._thread.is_alive()):
+            self.fetch(self.player["riot_id"], self.player["region"],
+                       quiet=True)
+
+    def copy_view(self):
+        """The window as a picture on the clipboard (Ctrl+Shift+C)."""
+        from .snapshot import capture, copy_image
+        try:
+            copy_image(capture(self.root))
+            self.set_status("Copied — paste it anywhere (Ctrl+V).", GOOD)
+        except Exception as e:                 # noqa: BLE001
+            self._log(e)
+            self.set_status("Couldn't copy the picture.", BAD)
+
+    def _install_shortcuts(self):
+        r = self.root
+        keys = [k for k, _ in VIEWS]
+
+        def has_result():
+            return self.result is not None and self.player is not None                 and self.bars.winfo_ismapped()
+
+        def jump(i):
+            if has_result() and i < len(keys):
+                self.navigate(keys[i])
+            return "break"
+
+        def step(d):
+            if has_result():
+                i = keys.index(self.view) if self.view in keys else 0
+                self.navigate(keys[(i + d) % len(keys)])
+            return "break"
+        def ctrl(e):
+            # one handler for every Ctrl+key: Ctrl+1…0 tabs, Ctrl+(Shift+)Tab
+            # next/previous tab, Ctrl+R refresh, Ctrl+Shift+C copy view
+            k, shift = e.keysym, bool(e.state & 0x1)
+            if k.isdigit() and len(k) == 1:
+                return jump((int(k) - 1) % 10)
+            if k in ("Tab", "ISO_Left_Tab"):
+                return step(-1 if shift or k == "ISO_Left_Tab" else 1)
+            if k in ("Next", "Prior"):            # Ctrl+PageDown / PageUp
+                return step(1 if k == "Next" else -1)
+            if k.lower() == "r":
+                self.refresh()
+                return "break"
+            if k.lower() == "c" and shift:
+                self.copy_view()
+                return "break"
+            return None
+        r.bind_all("<Control-KeyPress>", ctrl)
+        # Tk's own focus traversal binds Ctrl+Tab more specifically on the
+        # same "all" tag, which would win over the generic handler
+        r.bind_all("<Control-Key-Tab>", ctrl)
+        r.bind_all("<Control-Shift-Key-Tab>", ctrl)
+        r.bind_all("<F5>", lambda e: (self.refresh(), "break")[1])
+
+        def esc(e):
+            # back out of an opened game (Matches) — dialogs bind their own
+            if e.widget.winfo_toplevel() is not r:
+                return
+            s = self.screens.get(self.view)
+            if s is not None and getattr(s, "game_id", None) and                     hasattr(s, "_back"):
+                s._back()
+        r.bind("<Escape>", esc)
 
     # ------------------------------------------------------------ errors
     def show_error(self, e, retry=None):

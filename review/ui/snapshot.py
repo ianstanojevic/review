@@ -44,3 +44,39 @@ def capture(root) -> Image.Image:
     gdi32.DeleteDC(mem)
     user32.ReleaseDC(hwnd, hdc)
     return Image.frombuffer("RGB", (w, h), buf, "raw", "BGRX", 0, 1)
+
+
+def copy_image(img: Image.Image) -> None:
+    """Put ``img`` on the Windows clipboard (CF_DIB), so Ctrl+V pastes it
+    into Discord, Paint, Word…"""
+    import io
+    buf = io.BytesIO()
+    img.convert("RGB").save(buf, "BMP")
+    data = buf.getvalue()[14:]            # a DIB is a BMP minus its header
+    k32, u32 = ctypes.windll.kernel32, ctypes.windll.user32
+    k32.GlobalAlloc.restype = ctypes.c_void_p
+    k32.GlobalAlloc.argtypes = (ctypes.c_uint, ctypes.c_size_t)
+    k32.GlobalLock.restype = ctypes.c_void_p
+    k32.GlobalLock.argtypes = (ctypes.c_void_p,)
+    k32.GlobalUnlock.argtypes = (ctypes.c_void_p,)
+    k32.GlobalFree.argtypes = (ctypes.c_void_p,)
+    u32.SetClipboardData.restype = ctypes.c_void_p
+    u32.SetClipboardData.argtypes = (ctypes.c_uint, ctypes.c_void_p)
+    u32.OpenClipboard.argtypes = (ctypes.c_void_p,)
+    GMEM_MOVEABLE, CF_DIB = 0x0002, 8
+    h = k32.GlobalAlloc(GMEM_MOVEABLE, len(data))
+    if not h:
+        raise OSError("GlobalAlloc failed")
+    p = k32.GlobalLock(h)
+    ctypes.memmove(p, data, len(data))
+    k32.GlobalUnlock(h)
+    if not u32.OpenClipboard(None):
+        k32.GlobalFree(h)
+        raise OSError("clipboard busy")
+    try:
+        u32.EmptyClipboard()
+        if not u32.SetClipboardData(CF_DIB, h):
+            k32.GlobalFree(h)
+            raise OSError("SetClipboardData failed")
+    finally:
+        u32.CloseClipboard()
