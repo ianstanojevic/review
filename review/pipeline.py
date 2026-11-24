@@ -17,7 +17,7 @@ from .analysis import (FEATURE_VERSION, AnalysisResult, Filter,
                        MatchFeatures, analyze, extract_match, load_config)
 from .cache import Cache
 
-ENGINE_VERSION = "5"
+ENGINE_VERSION = "7"
 
 
 def _features_version(legendary: frozenset[int]) -> str:

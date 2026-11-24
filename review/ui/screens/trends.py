@@ -18,6 +18,37 @@ VERDICT_COL = {"improving": GOOD, "declining": BAD, "stable": FG,
                "rising": EDGE_HI, "falling": EDGE_HI, "insufficient": DIM}
 
 
+VERDICT_WORD = {"improving": "↑ better", "declining": "↓ worse",
+                "stable": "steady", "rising": "↑ up", "falling": "↓ down",
+                "insufficient": "too few games"}
+
+
+def trend_cell(tr):
+    rec = getattr(tr, "recent", None)
+    if tr.verdict == "stable" and rec:
+        return ({"improving": "↑ lately", "declining": "↓ lately",
+                 "rising": "↑ lately", "falling": "↓ lately"}[rec],
+                VERDICT_COL[rec])
+    return (VERDICT_WORD[tr.verdict], VERDICT_COL[tr.verdict])
+
+
+def vs_avg(key, m):
+    """'0.54 below' — your value vs the group average, teal when clearly
+    better, red when clearly worse (90% range doesn't reach the average)."""
+    from ...analysis import METRICS
+    if not m.n or m.mean != m.mean:
+        return ("—", DIM)
+    mag = fmt_value(key, abs(m.mean)).lstrip("+")
+    if fmt_value(key, 0.0).lstrip("+") == mag:
+        return ("at avg", FG)
+    text = "%s %s" % (mag, "above" if m.mean > 0 else "below")
+    pol = METRICS[key].polarity
+    sure = m.se == m.se and abs(m.mean) > 1.645 * m.se
+    if not pol or not sure:
+        return (text, FG)
+    return (text, GOOD if (m.mean > 0) == (pol > 0) else BAD)
+
+
 class TrendsScreen(Screen):
     def build(self):
         self.key = None
@@ -39,8 +70,8 @@ class TrendsScreen(Screen):
         res = self.res
         clear(self.box)
         b = self.box
-        p, _ = panel(b, "ROLLING TREND", EDGE_HI, right="role-adjusted "
-                     "verdict · slope 95% CI", expand=False)
+        p, _ = panel(b, "TREND", EDGE_HI, right="pick a stat",
+                     expand=False)
         tabs = W.TabRow(p, "STAT", [(t.key, t.label) for t in res.trends],
                         self.key, on_change=self._pick, style="teal",
                         bg=PANEL, small=True)
@@ -48,7 +79,8 @@ class TrendsScreen(Screen):
         t = next((t for t in res.trends if t.key == self.key), None)
         if t is None:
             return
-        tk.Label(p, text=T.trend(t), bg=PANEL, fg=VERDICT_COL[t.verdict],
+        tk.Label(p, text=T.trend(t, res), bg=PANEL,
+                 fg=VERDICT_COL[getattr(t, "recent", None) or t.verdict],
                  font=F_LG_B, anchor="w", justify="left",
                  wraplength=px(1000)).pack(fill="x")
         pp = [(pt, m) for pt, m in t.per_patch if m.n >= 5]
@@ -58,32 +90,29 @@ class TrendsScreen(Screen):
         C.trend_chart(p, self, res, t, height=230, take=take)
 
         left, right = grid(b, 2, pady=(px(8), 0))
-        p, _ = panel(left, "EVERY TRACKED STAT", EDGE_HI,
-                     right="first third → last third", expand=False)
+        grp = getattr(res, "reference_label", None) or "peer"
+        p, _ = panel(left, "EVERY STAT", EDGE_HI,
+                     right="you vs %s average · click a row" % grp,
+                     expand=False)
+        third = max(res.n_games // 3, 1)
         cols = [Col("stat", "STAT", 18, "w", stretch=True),
-                Col("v", "VERDICT", 10, "w",
+                Col("v", "TREND", 10, "w",
                     sort=lambda r: r.data.verdict),
-                Col("ch", "CHANGE", 8, "e"),
-                Col("avg", avg_word(res).upper(), 10, "e"),
-                Col("a", "FIRST ⅓ VS AVG", 14, "e"),
-                Col("z", "LAST ⅓ VS AVG", 14, "e")]
+                Col("a", "OLDEST %d GAMES" % third, 15, "e"),
+                Col("z", "NEWEST %d GAMES" % third, 15, "e"),
+                Col("avg", avg_word(res).upper(), 11, "e")]
         tab = Table(p, cols, rows_visible=len(res.trends), tooltip=self.tip,
                     on_click=lambda r: self._pick(r.data.key))
         rows = []
         for tr in res.trends:
-            ch = fmt_value(tr.key, tr.change)
-            if not ch.startswith(("+", "-", "—")):
-                ch = "+" + ch
             rows.append(Row({
                 "stat": tr.label,
-                "v": (tr.verdict, VERDICT_COL[tr.verdict]),
-                "ch": (ch if tr.verdict != "insufficient" else "—",
-                       VERDICT_COL[tr.verdict]),
+                "v": trend_cell(tr),
                 "avg": (fmt_value(tr.key, res.peer_means[tr.key])
                         if tr.key in getattr(res, "peer_means", {}) else
-                        "—", EDGE_HI),
-                "a": (mean_pm(tr.key, tr.first_third), DIM),
-                "z": (mean_pm(tr.key, tr.last_third), FG)},
+                        "—", DIM),
+                "a": vs_avg(tr.key, tr.first_third),
+                "z": vs_avg(tr.key, tr.last_third)},
                 marked=tr.key == self.key, data=tr))
         tab.set_rows(rows)
         tab.pack(fill="x")

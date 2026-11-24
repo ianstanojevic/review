@@ -142,40 +142,56 @@ def matchup_table(parent, s, res, rows_visible=8):
 # ----------------------------------------------------------- trends
 
 def trend_chart(parent, s, res, t, height=200, title=None, take=None):
-    ch = chart_block(parent, LineChart, title or "ROLLING %s (20 GAMES)" %
-                     t.label.upper(), height=height, tip=s.tip)
+    grp = getattr(res, "reference_label", None) or "peer"
+    ch = chart_block(parent, LineChart, title or "%s — YOU VS %s AVERAGE "
+                     "(LAST 20 GAMES AT EACH POINT)" % (t.label.upper(),
+                                                        grp.upper()),
+                     height=height, tip=s.tip)
     xs = [i + 1 for i, _, _, _ in t.rolling]
     ys = [m for _, m, _, _ in t.rolling]
     lo = [m - Z90 * se for _, m, se, _ in t.rolling]
     hi = [m + Z90 * se for _, m, se, _ in t.rolling]
     f = lambda v, k=t.key: fmt_value(k, v)
-    avg = (getattr(res, "peer_means", {}) or {}).get(t.key)
-    ch.set(baseline=avg,
-           baseline_label=("%s %s" % (avg_word(res), fmt_value(t.key, avg)))
-           if avg is not None else "",
-           xlabel="game # (oldest → newest)",
-           ylabel="%s, 20-game average" % t.label,
-           series=[Series(xs, ys, GOOD, t.label, lo=lo, hi=hi,
-                          ns=[n for *_, n in t.rolling], fmt=f)],
-           regions=patch_regions(res), xfmt=lambda v: "#%d" % v, yfmt=f)
-    ch.meta("n=%d games · 90%% CI · shaded = patches" % t.slope.n,
-            take if take is not None else T.trend(t))
+    you = Series(xs, ys, GOOD, "You", lo=lo, hi=hi,
+                 ns=[n for *_, n in t.rolling], fmt=f)
+    ref = t.rolling_ref if getattr(t, "rolling_ref", None) else None
+    if ref:
+        # the group's average for the roles you played in those same 20
+        # games: the gap between the lines is exactly what the verdict
+        # measures, even when you switched roles along the way
+        series = [Series([i + 1 for i, *_ in ref], [m for _, m, _, _ in ref],
+                         EDGE_HI, "%s average" % grp, width=1.5, dash=(6, 4),
+                         fmt=f), you]
+        base = dict(baseline=None, baseline_label="")
+        legend = "teal = you · dashed gold = %s average for the roles you "             "played · shaded = patches" % grp
+    else:
+        avg = (getattr(res, "peer_means", {}) or {}).get(t.key)
+        series = [you]
+        base = dict(baseline=avg, baseline_label=(
+            "%s %s" % (avg_word(res), fmt_value(t.key, avg)))
+            if avg is not None else "")
+        legend = "teal = you · shaded = patches"
+    ch.set(xlabel="game (oldest → newest)",
+           ylabel="%s, average of 20 games" % t.label,
+           series=series, regions=patch_regions(res),
+           xfmt=lambda v: "%d" % v, yfmt=f, **base)
+    ch.meta(legend, take if take is not None else T.trend(t, res))
     return ch
 
 
 def score_trend(parent, s, res, height=190):
-    ch = chart_block(parent, LineChart, "GAME SCORE (ROLLING 20)",
+    ch = chart_block(parent, LineChart, "GAME SCORE (LAST 20 GAMES AT EACH POINT)",
                      height=height, tip=s.tip)
     ss = res.score_series
     f = lambda v: "%.0f" % v
-    ch.set(xlabel="game # (oldest → newest)",
-           ylabel="game score, 20-game average",
+    ch.set(xlabel="game (oldest → newest)",
+           ylabel="game score, average of 20 games",
            series=[Series([i + 1 for i, *_ in ss], [m for _, m, _, _ in ss],
                           EDGE_HI, "score",
                           lo=[m - Z90 * se for _, m, se, _ in ss],
                           hi=[m + Z90 * se for _, m, se, _ in ss],
                           ns=[n for *_, n in ss], fmt=f)],
-           regions=patch_regions(res), xfmt=lambda v: "#%d" % v, yfmt=f,
+           regions=patch_regions(res), xfmt=lambda v: "%d" % v, yfmt=f,
            baseline=50.0, baseline_label="50 = typical %s" % (
                res.reference_label or "peer"))
     ch.meta("n=%d games · 90%% CI" % res.n_games,

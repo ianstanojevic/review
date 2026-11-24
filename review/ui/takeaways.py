@@ -72,19 +72,41 @@ def lane_curve(res, metric: str) -> str:
                                       l.n))
 
 
-def trend(t) -> str:
+def trend(t, res=None) -> str:
+    """Plain-words verdict: where you were and are vs the comparison
+    group's average for your role (the same numbers the chart shows)."""
     if t.verdict == "insufficient":
-        return "Not enough games for a trend verdict (need 30)."
-    word = {"improving": "Improving", "declining": "Declining",
-            "stable": "Stable", "rising": "Rising", "falling": "Falling"}[
-        t.verdict]
-    ch = fmt_value(t.key, t.change)
-    if not ch.startswith(("+", "-", "—")):
-        ch = "+" + ch
-    tail = ("95% CI of the slope excludes zero" if t.verdict != "stable"
-            else "change within the noise")
-    return "%s: %s %s over %d games vs role peers (%s)." % (
-        word, t.label, ch, t.slope.n, tail)
+        return "Not enough games for a verdict on %s yet — it needs 30."             % t.label
+    lab = getattr(res, "reference_label", None)
+    avg = "the %s average" % lab if lab else "the average in your games"
+
+    def rel(v, ref=True):
+        if v != v:                                    # NaN
+            return "unknown"
+        mag = fmt_value(t.key, abs(v)).lstrip("+")
+        if fmt_value(t.key, 0.0).lstrip("+") == mag:
+            return "right at " + (avg if ref else "it")
+        return "%s %s%s" % (mag, "above" if v > 0 else "below",
+                            " " + avg if ref else "")
+
+    a, z = t.first_third.mean, t.last_third.mean
+    rec = getattr(t, "recent", None)
+    if t.verdict == "stable" and rec and t.middle_third is not None:
+        word = {"improving": "better", "declining": "worse",
+                "rising": "higher", "falling": "lower"}[rec]
+        n = t.last_third.n
+        return ("%s has no steady direction overall, but your newest %d "
+                "games are clearly %s: %s, against %s in the %d before."
+                % (t.label, n, word, rel(z), rel(t.middle_third.mean, False),
+                   t.middle_third.n))
+    if t.verdict == "stable":
+        return ("%s is steady: %s in your newest games. The ups and downs "
+                "are normal variation." % (t.label, rel(z)))
+    word = {"improving": "getting better", "declining": "getting worse",
+            "rising": "going up", "falling": "going down"}[t.verdict]
+    return ("%s is %s: %s in your oldest games, %s in your newest. "
+            "That's a real change, not chance." % (t.label, word, rel(a),
+                                                     rel(z, False)))
 
 
 def deciders(res) -> str:

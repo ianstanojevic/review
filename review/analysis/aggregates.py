@@ -149,6 +149,15 @@ class Trend:
     first_third: Mean       # role-adjusted (you − role peer mean)
     last_third: Mean
     per_patch: list[tuple[str, Mean]]               # raw values
+    # rolling average of the comparison group (role peer mean of the role
+    # you played in each game) over the same windows as `rolling`: the line
+    # your own line is judged against. None without a baseline.
+    rolling_ref: list[tuple[int, float, float, int]] | None = None
+    # no overall direction, but the newest third differs clearly from the
+    # middle third (a U-shape a straight line can't see): "improving" /
+    # "declining" / "rising" / "falling", else None
+    recent: str | None = None
+    middle_third: Mean | None = None
 
 
 def trend(games: list[Game], key: str, baseline=None, window: int = 20,
@@ -158,13 +167,17 @@ def trend(games: list[Game], key: str, baseline=None, window: int = 20,
     games at the end would otherwise look like a CS/min collapse."""
     raw = col(games, key)
     y = raw
+    ref_roll = None
     if baseline is not None:
         means = {}
         for _, p in games:
             if p.role and p.role not in means:
                 v = baseline.values(p.role, key)
                 means[p.role] = float(v.mean()) if len(v) else np.nan
-        y = raw - np.array([means.get(p.role, np.nan) for _, p in games])
+        exp = np.array([means.get(p.role, np.nan) for _, p in games])
+        y = raw - exp
+        exp = np.where(np.isnan(raw), np.nan, exp)
+        ref_roll = rolling_mean(exp, window)
     m = METRICS[key]
     s = ols_slope(y, conf=0.95)
     n = len(arr(y))
@@ -182,11 +195,21 @@ def trend(games: list[Game], key: str, baseline=None, window: int = 20,
     patches: dict[str, list[float]] = defaultdict(list)
     for (mf, p), v in zip(games, raw):
         patches[mf.patch].append(v)
+    middle = mean_se(y[third:len(y) - third]) if len(y) >= 3 * third         else None
+    recent = None
+    if verdict == "stable" and middle is not None and middle.n >= 10             and last.n >= 10 and not math.isnan(middle.se + last.se):
+        d = last.mean - middle.mean
+        if abs(d) > 1.96 * math.hypot(middle.se, last.se):
+            up = d > 0
+            recent = (("improving" if up == (m.polarity > 0) else
+                       "declining") if m.polarity else
+                      ("rising" if up else "falling"))
     per_patch = sorted(((pt, mean_se(v)) for pt, v in patches.items()),
                        key=lambda t: [int(x) for x in t[0].split(".")
                                       if x.isdigit()])
     return Trend(key, m.label, verdict, float(change), s,
-                 rolling_mean(raw, window), first, last, per_patch)
+                 rolling_mean(raw, window), first, last, per_patch,
+                 ref_roll, recent, middle)
 
 
 def score_series(scores: np.ndarray, window: int = 20):

@@ -154,3 +154,20 @@ def test_sessions_and_tilt_inputs(cfg):
     # synth games are 3 h apart -> every game is its own session
     assert r.sessions.n_sessions == 20
     assert r.sessions.by_game_number[0].rate.n == 20
+
+
+def test_trend_sees_a_recent_turn(cfg):
+    """Down then up (a U): no straight-line trend, but the newest third is
+    clearly worse than the middle one, and the verdict must say so."""
+    games = synth_games(120, seed=12)
+    games.sort(key=lambda m: m.creation_ms)
+    rng = np.random.default_rng(12)
+    for i, m in enumerate(games):
+        u = abs(i - 60) / 60                       # 1 -> 0 -> 1
+        m.player(ME).stats["deaths_per_min"] = 0.1 + 0.15 * u + \
+            rng.normal(0, 0.02)
+    t = next(t for t in analyze(games, ME, Filter(), cfg).trends
+             if t.key == "deaths_per_min")
+    assert t.verdict == "stable" and t.recent == "declining"
+    flat = analyze(synth_games(120, seed=8), ME, Filter(), cfg)
+    assert all(t.recent is None for t in flat.trends)

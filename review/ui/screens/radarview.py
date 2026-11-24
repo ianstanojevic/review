@@ -475,10 +475,10 @@ class RadarScreen(Screen):
                               [m for _, m, _, _ in ss], EDGE_HI,
                               "game score", width=2.2,
                               fmt=lambda v: "%.0f" % v))
-        ch.set(xlabel="game # (oldest → newest)",
+        ch.set(xlabel="game (oldest → newest)",
                ylabel="percentile vs %s, 10-game average" % group_name(res),
                series=ser, ylim=(0, 100), baseline=50.0,
-               xfmt=lambda v: "#%d" % v, yfmt=lambda v: "%.0f" % v)
+               xfmt=lambda v: "%d" % v, yfmt=lambda v: "%.0f" % v)
         ch.set_meta(a.label.upper() + " OVER TIME", "n=%d" % a.n, "")
         if len(ser) > 1:
             lg = tk.Frame(self.dd, bg=PANEL)
