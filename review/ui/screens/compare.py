@@ -21,7 +21,8 @@ from ...theme.tokens import (BAD, DIM, DMG_AD, DMG_AP, EDGE, EDGE_HI, F_LG_B,
                              F_SM, F_SM_B, F_XS, F_XS_B, FG, GOOD, PANEL,
                              PANEL2, score_color)
 from ...theme.widgets import Col, Row, Table, px
-from .base import Screen, clear, empty_note, grid, panel, radar_axes
+from .base import (Screen, clear, empty_note, fit_wrap, grid, panel,
+                   radar_axes)
 
 MAX_OTHERS = 5
 COLORS = [GOOD, DMG_AP, "#c77dff", DMG_AD, "#e8c547"]
@@ -48,7 +49,9 @@ class CompareScreen(Screen):
         self.me = None                   # my AnalysisResult on the scale
         self._gen = 0
         self._imgs = []
-        for rid in self.app.prefs.get("compare", [])[:MAX_OTHERS]:
+        from ...riot_client import clean_riot_id
+        for rid in [clean_riot_id(r) for r in
+                    self.app.prefs.get("compare", [])][:MAX_OTHERS]:
             self.others.append({"riot_id": rid, "res": None,
                                 "status": "waiting"})
         top, _ = panel(self.body, "COMPARE", EDGE_HI, expand=False,
@@ -133,6 +136,8 @@ class CompareScreen(Screen):
                 self.me = me
                 for o in self.others:
                     pu, r = results.get(o["riot_id"], (None, None))
+                    if pu and not o.get("region"):
+                        o["region"] = app.cache.player_region(pu)
                     if r is not None and r.radar is not None:
                         o["puuid"], o["res"] = pu, r
                         o["status"] = "ready"
@@ -158,8 +163,8 @@ class CompareScreen(Screen):
 
     # ------------------------------------------------------- add/remove
     def add(self, riot_id):
-        from ...riot_client import ReviewError, parse_riot_id
-        riot_id = (riot_id or "").strip()
+        from ...riot_client import ReviewError, clean_riot_id, parse_riot_id
+        riot_id = clean_riot_id(riot_id)
         if not riot_id:
             return
         try:
@@ -230,6 +235,9 @@ class CompareScreen(Screen):
                 return
             o["job"] = None
             o["region"] = job.region.code
+            if job.riot_id and job.riot_id.lower() == o["riot_id"].lower()                     and job.riot_id != o["riot_id"]:
+                o["riot_id"] = job.riot_id      # Riot's own capitalisation
+                self._save()
             if isinstance(job.error, PlayerNotFound):
                 o["status"] = "not found"
                 self._chips()
@@ -361,7 +369,12 @@ class CompareScreen(Screen):
         left, right = grid(self.box, 2, pady=(px(8), 0))
         self._radar(left, players)
         self._standings(right, players)
-        self._table(players)
+        # up to 3 players the stat table fits beside the radar, filling the
+        # space under the standings; more columns need the full width
+        if len(players) <= 3:
+            self._table(players, right)
+        else:
+            self._table(players, self.box)
 
     def _radar(self, parent, players):
         p, _ = panel(parent, "RADARS", EDGE_HI, expand=False,
@@ -440,17 +453,19 @@ class CompareScreen(Screen):
             lines.append("Best in the group at: %s." % ", ".join(lead))
         if trail:
             lines.append("Lowest in the group at: %s." % ", ".join(trail))
-        tk.Label(p, text="  ".join(lines), bg=PANEL, fg=FG, font=F_SM,
-                 anchor="w", justify="left", wraplength=px(520)).pack(
-                     fill="x", pady=(px(8), 0))
+        summary = tk.Label(p, text="  ".join(lines), bg=PANEL, fg=FG,
+                           font=F_SM, anchor="w", justify="left",
+                           wraplength=px(520))
+        summary.pack(fill="x", pady=(px(8), 0))
+        fit_wrap(summary)
 
-    def _table(self, players):
-        p, _ = panel(self.box, "HEAD TO HEAD", EDGE_HI, expand=False,
+    def _table(self, players, parent):
+        p, _ = panel(parent, "HEAD TO HEAD", EDGE_HI, expand=False,
                      pady=(px(8), 0),
                      right="teal = best in the group · red = lowest")
         cols = [Col("stat", "", 18, "w", stretch=True)] + [
-            Col("p%d" % i, name.split("#")[0][:12] + (
-                "" if i else " (you)"), 12, "e")
+            Col("p%d" % i, name.split("#")[0] + (
+                "" if i else " (you)"), 12, "e", raw_title=True)
             for i, (name, _, _) in enumerate(players)]
         rows = []
 

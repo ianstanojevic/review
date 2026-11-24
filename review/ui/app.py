@@ -129,6 +129,7 @@ class App:
         except Exception:
             self.legendary = frozenset()
         self.player: dict | None = None     # puuid, riot_id, region
+        self._clean_saved_ids()
         self.queue_key = self.prefs.get("queue", "solo")
         self.count = int(self.prefs.get("count", 150))
         self.role = self.champion = self.last_n = None
@@ -523,6 +524,8 @@ class App:
               count: int | None = None, quiet: bool = False):
         """Start (or restart) the background fetch for a player. quiet=True
         keeps the current screen (filter switch) instead of the loader."""
+        from ..riot_client import clean_riot_id
+        riot_id = clean_riot_id(riot_id)
         if queue_key:
             self.queue_key = queue_key
             self.queue_row.select(queue_key, fire=False)
@@ -906,7 +909,27 @@ class App:
             pass
 
     # ------------------------------------------------------------- misc
+    def _clean_saved_ids(self):
+        """Recent searches / Compare lists saved before Riot IDs were
+        cleaned may hold pasted line breaks ('Ryuk\n#adc')."""
+        from ..riot_client import clean_riot_id
+        rec, seen = [], set()
+        for r in self.prefs.get("recent", []) or []:
+            rid = clean_riot_id(r.get("riot_id", ""))
+            k = (rid.lower(), r.get("region"))
+            if rid and k not in seen:
+                seen.add(k)
+                rec.append(dict(r, riot_id=rid))
+        if rec != (self.prefs.get("recent", []) or []):
+            self.prefs.set("recent", rec)
+        cmp_ = self.prefs.get("compare", []) or []
+        clean = [clean_riot_id(r) for r in cmp_]
+        if clean != cmp_:
+            self.prefs.set("compare", clean)
+
     def _remember(self, riot_id, region):
+        from ..riot_client import clean_riot_id
+        riot_id = clean_riot_id(riot_id)
         rec = [r for r in self.prefs.get("recent", [])
                if r.get("riot_id", "").lower() != riot_id.lower()
                or r.get("region") != region]

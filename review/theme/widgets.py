@@ -674,6 +674,7 @@ class Col:
     sort: Callable[[dict], Any] | None = None
     tip: str | None = None
     stretch: bool = False
+    raw_title: bool = False           # a player name: keep its own case
 
 
 @dataclass
@@ -819,7 +820,8 @@ class Table(tk.Frame):
                 continue
             active = col.key == self.sort_key
             anchor, x = self._anchor(col, x0, x1)
-            t = c.create_text(x, px(10), text=header_text(col.title),
+            t = c.create_text(x, px(10), text=col.title if col.raw_title
+                              else header_text(col.title),
                               anchor=anchor,
                               fill=EDGE_HI if active else DIM, font=F_XS_B)
             if active:

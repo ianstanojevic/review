@@ -240,6 +240,13 @@ class Cache:
                 "last_synced=excluded.last_synced",
                 (puuid, game_name, tag_line, region, int(time.time())))
 
+    def player_region(self, puuid: str) -> str | None:
+        """The server a player was last fetched from ("EUW", "NA"…)."""
+        with self._lock:
+            row = self._db.execute("SELECT region FROM players WHERE "
+                                   "puuid=?", (puuid,)).fetchone()
+        return row[0] if row else None
+
     def find_player(self, game_name: str, tag_line: str,
                     region: str | None) -> str | None:
         """region=None: any server (Riot IDs are unique across regions)."""

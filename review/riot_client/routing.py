@@ -50,13 +50,22 @@ def region_for_platform(platform: str) -> Region | None:
     return None
 
 
+def clean_riot_id(text: str) -> str:
+    """Tidy a typed or pasted Riot ID: op.gg & co. copy as 'Ryuk\n#adc',
+    which ended up as a two-line name everywhere. Any run of whitespace
+    becomes one space, and none is kept around the '#'."""
+    s = " ".join((text or "").split())
+    name, sep, tag = s.rpartition("#")
+    return "%s#%s" % (name.strip(), tag.strip()) if sep else s
+
+
 def parse_riot_id(text: str) -> tuple[str, str]:
     """'flintgnuggaren#ian' -> ('flintgnuggaren', 'ian').
 
     Game names may contain spaces and '#'-free unicode; the tag is after the
     LAST '#'.
     """
-    name, sep, tag = text.strip().rpartition("#")
+    name, sep, tag = clean_riot_id(text).rpartition("#")
     name, tag = name.strip(), tag.strip()
     if not sep or not name or not tag:
         raise ValueError("Riot ID must look like Name#TAG (got %r)" % text)

@@ -141,3 +141,12 @@ def test_zones():
     assert relative_zone("red_jungle_bot", 100) == "enemy_jungle_bot"
     assert relative_zone("red_jungle_bot", 200) == "own_jungle_bot"
     assert in_enemy_half(10000, 10000, 100) and not in_enemy_half(10000, 10000, 200)
+
+
+def test_early_afk_surrender_counts_as_remake():
+    from review.analysis.extract import is_remake
+    ps = [{"gameEndedInSurrender": True, "gameEndedInEarlySurrender": False}]
+    assert is_remake({"gameDuration": 309, "participants": ps})
+    assert not is_remake({"gameDuration": 1500, "participants": ps})
+    assert is_remake({"gameDuration": 95, "participants": []})
+    assert not is_remake({"gameDuration": 1500, "participants": [{}]})

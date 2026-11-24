@@ -13,7 +13,7 @@ from typing import Iterable
 from .model import NAN, ROLES, Death, MatchFeatures, PlayerGame
 from .zones import in_enemy_half, zone
 
-FEATURE_VERSION = "3"
+FEATURE_VERSION = "4"
 REMAKE_SECONDS = 300
 EARLY_MS = 14 * 60_000
 AHEAD_GOLD = 300           # "ahead" = ≥ this much gold over lane opponent
@@ -40,10 +40,19 @@ def _patch(version: str) -> str:
     return ".".join(parts[:2]) if len(parts) >= 2 else "?"
 
 
+AFK_SURRENDER_SECONDS = 600
+
+
 def is_remake(info: dict) -> bool:
-    return (info.get("gameDuration", 0) < REMAKE_SECONDS
-            or any(p.get("gameEndedInEarlySurrender")
-                   for p in info.get("participants", [])))
+    """Remakes, and surrenders before 10:00 (only possible when a teammate
+    left): a 5-minute AFK game's per-minute stats are noise (1.9 CS/min),
+    so like remakes they're left out of the analysis."""
+    d = info.get("gameDuration", 0)
+    ps = info.get("participants", [])
+    return (d < REMAKE_SECONDS
+            or any(p.get("gameEndedInEarlySurrender") for p in ps)
+            or (d < AFK_SURRENDER_SECONDS
+                and any(p.get("gameEndedInSurrender") for p in ps)))
 
 
 class _Timeline:

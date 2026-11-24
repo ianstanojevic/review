@@ -89,6 +89,18 @@ def y_grid(pen: Pen, ax: Axes, ticks, fmt: Callable[[float], str],
             pen.text(ax.x0 - px(6), y, fmt(t), F_XS, DIM, "rm")
 
 
+def _left_overflow(pen) -> float:
+    """How far any text sticks out past x=0 (0 when none does)."""
+    worst = 0.0
+    for x, _y, s, font, _c, anchor, _a in pen.texts:
+        if x > px(160) or not s:
+            continue
+        w = pen.measure(s, font)
+        left = x - w if anchor[0] == "r" else x - w / 2             if anchor[0] == "m" else x
+        worst = max(worst, -left)
+    return worst
+
+
 # --------------------------------------------------------------- base class
 
 class Chart(tk.Canvas):
@@ -135,7 +147,7 @@ class Chart(tk.Canvas):
     def plot_box(self, w, h):
         l, t, r, b = (px(v) for v in self.margins)
         et, eb = getattr(self, "_axis_pad", (0, 0))
-        return l, t + et, w - r, h - b - eb
+        return l + getattr(self, "_lfix", 0), t + et, w - r, h - b - eb
 
     def _draw_all(self, pen, w, h):
         """draw() plus the axis titles: ``ylabel`` top-left above the plot
@@ -166,6 +178,14 @@ class Chart(tk.Canvas):
         self.hits = []
         if self.data:
             self._draw_all(pen, w, h)
+            # long y labels ("Emerald III") ran off the left edge: widen
+            # the left margin by the overflow and draw once more
+            over = _left_overflow(pen)
+            if over > 0 and getattr(self, "_lfix", 0) < px(120):
+                self._lfix = getattr(self, "_lfix", 0) + over + px(4)
+                pen = Pen(w, h, bg=self.bgc, ss=getattr(self, "_ss", 2))
+                self.hits = []
+                self._draw_all(pen, w, h)
         else:
             pen.text(w / 2, h / 2, "no data yet", F_XS, DIM, "mm")
         self._photo = ImageTk.PhotoImage(pen.finish())

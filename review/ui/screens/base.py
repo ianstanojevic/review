@@ -251,9 +251,23 @@ def clear(frame):
         w.destroy()
 
 
+def fit_wrap(label, pad=4, minimum=120):
+    """Wrap a label at its real width (pack it with fill="x"): a fixed
+    wraplength cut long verdicts off in narrow windows and wrapped them
+    needlessly early in wide ones."""
+    def on(e):
+        w = max(e.width - pad, minimum)
+        if int(label.cget("wraplength") or 0) != w:
+            label.configure(wraplength=w)
+    label.bind("<Configure>", on, add="+")
+    return label
+
+
 def empty_note(parent, text, bg=PANEL):
-    tk.Label(parent, text=text, bg=bg, fg=DIM, font=F_SM, justify="left",
-             wraplength=px(480)).pack(anchor="w", pady=SP_S)
+    lab = tk.Label(parent, text=text, bg=bg, fg=DIM, font=F_SM,
+                   justify="left", anchor="w", wraplength=px(480))
+    lab.pack(fill="x", pady=SP_S)
+    fit_wrap(lab)
 
 
 def stat_text(key, v):

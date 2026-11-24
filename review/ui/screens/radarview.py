@@ -21,6 +21,7 @@ from ...theme.tokens import (BAD, DIM, DMG_AD, DMG_AP, DMG_TRUE, EDGE_HI,
                              GOOD, HOVER, PANEL, PANEL2, score_color)
 from ...theme.widgets import Col, Row, Table, px
 from .base import (Screen, chart_block, clear, cname, date_text, empty_note,
+                   fit_wrap,
                    fifty_means, group_name, panel, peer_word, radar_axes,
                    score_pm)
 
@@ -306,7 +307,8 @@ class RadarScreen(Screen):
                                     parse_riot_id)
         from ...sync import QUEUES, SyncJob
         from ...pipeline import analyze_player
-        riot_id = (riot_id or "").strip()
+        from ...riot_client import clean_riot_id
+        riot_id = clean_riot_id(riot_id)
         if not riot_id:
             return
         app = self.app
@@ -508,10 +510,11 @@ class RadarScreen(Screen):
         if tip:
             tk.Frame(self.dd, bg=EDGE_HI, height=1).pack(
                 fill="x", pady=(px(10), px(6)))
-            tk.Label(self.dd, text="→ " + tip, bg=PANEL,
-                     fg=GOOD if a.score >= 50 else BAD, font=F_SM,
-                     justify="left", anchor="w", wraplength=px(390)).pack(
-                         fill="x")
+            lab = tk.Label(self.dd, text="→ " + tip, bg=PANEL,
+                           fg=GOOD if a.score >= 50 else BAD, font=F_SM,
+                           justify="left", anchor="w", wraplength=px(390))
+            lab.pack(fill="x")
+            fit_wrap(lab)
 
     def _game_line(self, parent, g, v, best):
         r = tk.Frame(parent, bg=PANEL2, cursor="hand2")

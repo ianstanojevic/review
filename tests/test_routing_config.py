@@ -35,3 +35,11 @@ def test_dotenv_and_limits():
     env = parse_dotenv('# c\nA=1\nexport B="two"\n\nC = \'3\'\nbad line')
     assert env == {"A": "1", "B": "two", "C": "3"}
     assert parse_rate_limits("20:1, 100:120") == ((20, 1.0), (100, 120.0))
+
+
+def test_clean_riot_id_handles_pasted_line_breaks():
+    from review.riot_client import clean_riot_id, parse_riot_id
+    assert clean_riot_id("Ryuk\n#adc") == "Ryuk#adc"
+    assert clean_riot_id("  Hide  on\tbush # KR1 ") == "Hide on bush#KR1"
+    assert clean_riot_id("no tag") == "no tag"
+    assert parse_riot_id("Doublelift\r\n#NA01") == ("Doublelift", "NA01")

@@ -62,3 +62,11 @@ def test_raw_timeline_bytes_roundtrip(tmp_path):
         assert c.get_timeline("EUW1_9") == {"info": {"frames": [
             {"timestamp": 0}]}}
         assert not c.missing_timelines(["EUW1_9"])
+
+
+def test_player_region(tmp_path):
+    from review.cache import Cache
+    with Cache(tmp_path / "c.sqlite") as c:
+        c.upsert_player("p1", "Doublelift", "NA01", "NA")
+        assert c.player_region("p1") == "NA"
+        assert c.player_region("nobody") is None

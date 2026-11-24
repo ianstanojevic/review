@@ -110,8 +110,11 @@ class OverviewScreen(Screen):
         self.wr_pm.configure(text="%s (90%%)" % pm_text(r))
         self.split.set(r.p if r.n else None)
         self.games.configure(text="%d" % res.n_games)
-        self.rec.configure(text="%dW %dL · %d remakes excluded" % (
-            r.wins, r.n - r.wins, res.excluded.remakes))
+        k = res.excluded.remakes
+        self.rec.configure(text="%dW %dL%s" % (
+            r.wins, r.n - r.wins, "" if not k else
+            " · %d remake%s / AFK game%s left out" % (
+                k, "" if k == 1 else "s", "" if k == 1 else "s")))
         R = res.radar
         if R:
             anim.count_up(self.score, R.overall, "%.0f")

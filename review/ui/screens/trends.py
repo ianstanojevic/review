@@ -12,7 +12,8 @@ from ...theme.tokens import (BAD, DIM, EDGE_HI, F_LG_B, F_SM, FG, GHOST,
 from ...theme.widgets import Col, Row, Table, px
 from .. import catalogue as C
 from .. import takeaways as T
-from .base import Screen, avg_word, clear, grid, mean_pm, panel
+from .base import (Screen, avg_word, clear, fit_wrap, grid, mean_pm,
+                   panel)
 
 VERDICT_COL = {"improving": GOOD, "declining": BAD, "stable": FG,
                "rising": EDGE_HI, "falling": EDGE_HI, "insufficient": DIM}
@@ -79,10 +80,11 @@ class TrendsScreen(Screen):
         t = next((t for t in res.trends if t.key == self.key), None)
         if t is None:
             return
-        tk.Label(p, text=T.trend(t, res), bg=PANEL,
+        head = fit_wrap(tk.Label(p, text=T.trend(t, res), bg=PANEL,
                  fg=VERDICT_COL[getattr(t, "recent", None) or t.verdict],
                  font=F_LG_B, anchor="w", justify="left",
-                 wraplength=px(1000)).pack(fill="x")
+                 wraplength=px(1000)))
+        head.pack(fill="x")
         pp = [(pt, m) for pt, m in t.per_patch if m.n >= 5]
         take = ("Per patch (raw, 5+ games): " + " · ".join(
             "%s %s (n=%d)" % (pt, mean_pm(t.key, m), m.n) for pt, m in pp)
@@ -98,8 +100,12 @@ class TrendsScreen(Screen):
         cols = [Col("stat", "STAT", 18, "w", stretch=True),
                 Col("v", "TREND", 10, "w",
                     sort=lambda r: r.data.verdict),
-                Col("a", "OLDEST %d GAMES" % third, 15, "e"),
-                Col("z", "NEWEST %d GAMES" % third, 15, "e"),
+                Col("a", "OLDEST %d" % third, 11, "e",
+                    tip="Your oldest %d games: how far above or below the "
+                    "%s average you were." % (third, grp)),
+                Col("z", "NEWEST %d" % third, 11, "e",
+                    tip="Your newest %d games: how far above or below the "
+                    "%s average you are." % (third, grp)),
                 Col("avg", avg_word(res).upper(), 11, "e")]
         tab = Table(p, cols, rows_visible=len(res.trends), tooltip=self.tip,
                     on_click=lambda r: self._pick(r.data.key))

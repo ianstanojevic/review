@@ -6,7 +6,7 @@ from .errors import (Cancelled, InvalidKey, MissingKey, NotFound,
                      ServiceUnavailable)
 from .limiter import RateLimiter
 from .routing import (PRIMARY_REGIONS, REGIONS, Region, get_region,
-                      parse_riot_id)
+                      parse_riot_id, clean_riot_id)
 
 
 _LIMITER: RateLimiter | None = None
@@ -25,7 +25,7 @@ def default_client() -> RiotClient:
 
 __all__ = [
     "RiotClient", "RateLimiter", "Region", "REGIONS", "PRIMARY_REGIONS",
-    "get_region", "parse_riot_id", "parse_limit_header", "default_client",
+    "get_region", "parse_riot_id", "clean_riot_id", "parse_limit_header", "default_client",
     "ReviewError", "RiotApiError", "Cancelled", "InvalidKey", "MissingKey",
     "NotFound", "PlayerNotFound", "RateLimited", "ServiceUnavailable",
 ]

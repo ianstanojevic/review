@@ -218,7 +218,8 @@ def patch_scores(parent, s, res, height=170):
     ch = chart_block(parent, BarChart, "PERFORMANCE BY PATCH (GAME SCORE)",
                      height=height, tip=s.tip)
     ch.set(xlabel="patch", ylabel="average game score",
-           bins=bins, baseline=50, baseline_label="50 = typical peer",
+           bins=bins, baseline=50, baseline_label="50 = typical %s" % (
+               res.reference_label or "peer"),
            ylim=(0, 100), yfmt=lambda v: "%.0f" % v,
            vfmt=lambda v: "%.0f" % v)
     ranked = sorted((b for b in bins if b.n >= 5), key=lambda b: -b.value)
