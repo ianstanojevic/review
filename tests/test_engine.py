@@ -171,3 +171,20 @@ def test_trend_sees_a_recent_turn(cfg):
     assert t.verdict == "stable" and t.recent == "declining"
     flat = analyze(synth_games(120, seed=8), ME, Filter(), cfg)
     assert all(t.recent is None for t in flat.trends)
+
+
+def test_no_scoreable_games_gives_no_radar(cfg):
+    games = synth_games(30, seed=13)
+    for m in games:
+        m.player(ME).role = None          # Riot gave no position
+    r = analyze(games, ME, Filter(), cfg)
+    assert r.n_games == 30 and r.radar is None
+    assert r.excluded.unknown_role == 30
+
+
+def test_empty_reference_falls_back_to_own_games(cfg):
+    games = synth_games(40, seed=14)
+    r = analyze(games, ME, Filter(), cfg, reference=[],
+                reference_label="Master+")
+    assert r.reference_label is None and r.reference_games == 0
+    assert r.radar is not None and r.radar.overall == r.radar.overall

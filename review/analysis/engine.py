@@ -140,12 +140,15 @@ def analyze(matches: list[MatchFeatures], puuid: str,
     ex = Exclusions()
     every = _eligible(matches, puuid, flt.queues, ex)
     # the peer pool always uses ALL your eligible games (bigger, fairer)
+    ref = None
     if reference is not None:
         ref = [m for m in reference if not m.remake
-               and m.queue_id in (420, 440)]
+               and m.queue_id in (420, 440)] or None
+    if ref is not None:
         baseline = PeerBaseline(ref, puuid)
     else:
-        ref = None
+        # no reference, or an empty one (benchmark not built for this
+        # region yet): score against the players in your own games
         baseline = PeerBaseline([m for m, _ in every], puuid)
     model = RadarModel(baseline, cfg)
     sess_info = agg.session_info(every, cfg.session_gap_min)
@@ -170,6 +173,11 @@ def analyze(matches: list[MatchFeatures], puuid: str,
     radar = prev_radar = None
     if pgs:
         radar = model.radar(pgs, prev, compute_ci, scored=scored)
+        if radar.overall != radar.overall:
+            # nothing scoreable (e.g. Riot gave no role for any game, so
+            # there are no same-role players to compare with): no radar,
+            # like no games, rather than a radar full of NaN
+            radar = None
         half = len(pgs) // 2
         if half >= cfg.min_games:
             prev_radar = model.radar(pgs[:half], prev[:half], compute_ci=False)

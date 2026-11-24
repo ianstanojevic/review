@@ -272,7 +272,7 @@ class RadarModel:
         overall = float((np.nan_to_num(scores) * ow).sum() / ow.sum()) \
             if ow.sum() else np.nan
         lo = hi = np.nan
-        if B:
+        if B and ow.sum():
             mat = np.vstack([b if (b is not None and ok[i]) else np.zeros(B)
                              for i, b in enumerate(boots)])
             ob = (mat * ow[:, None]).sum(0) / ow.sum()

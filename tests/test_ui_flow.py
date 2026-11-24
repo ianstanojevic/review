@@ -101,3 +101,23 @@ def test_radar_grows_even_if_the_reveal_is_interrupted(app):
     assert radar.shown is not None
     assert max(abs(s - t) for s, t in zip(radar.shown, target)) < 0.5
     assert not app.errors, app.errors
+
+
+@pytest.mark.parametrize("case", ["no_radar", "few_games"])
+def test_every_view_copes_with_thin_results(app, case):
+    """Games but no radar (no role from Riot) or only 3 games: every view
+    must show something sensible, not raise."""
+    from review.ui.app import VIEWS
+    games = synth_games(30 if case == "no_radar" else 3, seed=21)
+    if case == "no_radar":
+        for m in games:
+            m.player(ME).role = None
+    res = analyze(games, ME, Filter(), load_config(), compute_ci=False)
+    app.player = {"puuid": ME, "riot_id": "Test#T", "region": "EUW"}
+    app._show_bars()
+    app._on_result(app.gen, res, None, False)
+    pump(app, 1.5)
+    for key, _ in VIEWS:
+        app.navigate(key)
+        pump(app, 1.0)
+        assert not app.errors, (case, key, app.errors)
